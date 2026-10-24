@@ -1,0 +1,80 @@
+{{define "content"}}
+<div style="padding: 1.5rem 0;">
+  <!-- HERO SECTION -->
+  <div style="background: linear-gradient(135deg, #0b1329 0%, #1e293b 100%); color: white; border-radius: var(--radius-lg); padding: 3.5rem 2.5rem; box-shadow: var(--shadow-lg); position: relative; overflow: hidden; margin-bottom: 2.5rem;">
+    <div style="max-width: 680px; position: relative; z-index: 2;">
+      <span style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); padding: 5px 12px; border-radius: 20px; font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+        SOLID Mimarisi • Backend & Frontend Katman Ayrımı
+      </span>
+      <h1 style="font-size: 2.6rem; font-weight: 800; line-height: 1.2; margin: 1.2rem 0 1rem; color: #f8fafc;">
+        İkinci El Araç Açık Artırma & Yapay Zekâ Değerleme
+      </h1>
+      <p style="font-size: 1.1rem; line-height: 1.6; color: #94a3b8; margin-bottom: 2rem;">
+        Bcrypt ile şifrelenmiş güvenli hesaplar, HttpOnly oturum çerezleri, kullanıcı ve yönetici (admin) rol bazlı erişim denetimi ile güçlendirilmiş açık artırma platformu.
+      </p>
+
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        {{if .IsAuthenticated}}
+          <a href="/dashboard" class="btn btn-primary" style="font-size: 1.05rem; padding: 0.75rem 1.6rem;">
+            👤 Kullanıcı Panelime Git
+          </a>
+          {{if .IsAdmin}}
+            <a href="/admin" class="btn" style="background: #7c3aed; color: white; font-size: 1.05rem; padding: 0.75rem 1.6rem;">
+              👑 Yönetici Paneli
+            </a>
+          {{end}}
+        {{else}}
+          <a href="/register" class="btn btn-primary" style="font-size: 1.05rem; padding: 0.75rem 1.6rem;">
+            🚀 Hemen Ücretsiz Kayıt Ol
+          </a>
+          <a href="/login" class="btn btn-secondary" style="font-size: 1.05rem; padding: 0.75rem 1.6rem;">
+            🔑 Giriş Yap
+          </a>
+        {{end}}
+      </div>
+    </div>
+  </div>
+
+  <!-- ÖNE ÇIKAN SİSTEM ÖZELLİKLERİ KARTLARI -->
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2.5rem;">
+    <div style="background: white; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
+      <div style="font-size: 2.2rem; margin-bottom: 0.75rem;">🔒</div>
+      <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 0.5rem;">Bcrypt Şifreleme</h3>
+      <p style="color: #64748b; font-size: 0.92rem; line-height: 1.5;">
+        Kullanıcı şifreleri açık metin olarak asla tutulmaz; endüstri standardı bcrypt algoritmasıyla tuzlanarak (salt) güvenli biçimde hash'lenir.
+      </p>
+    </div>
+
+    <div style="background: white; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
+      <div style="font-size: 2.2rem; margin-bottom: 0.75rem;">🍪</div>
+      <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 0.5rem;">Oturum Çerezi (Session)</h3>
+      <p style="color: #64748b; font-size: 0.92rem; line-height: 1.5;">
+        Kriptografik 64-karakter oturum anahtarları HttpOnly ve SameSite Lax korumalı çerezlerle taşınır; XSS ve oturum çalma risklerine karşı korunur.
+      </p>
+    </div>
+
+    <div style="background: white; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
+      <div style="font-size: 2.2rem; margin-bottom: 0.75rem;">🛡️</div>
+      <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 0.5rem;">Rol Bazlı Yetkilendirme</h3>
+      <p style="color: #64748b; font-size: 0.92rem; line-height: 1.5;">
+        'user' ve 'admin' rolleri tam ayrılmıştır. Yetkisiz kullanıcıların admin sayfalarına erişimi 403 Forbidden mekanizmasıyla engellenir.
+      </p>
+    </div>
+  </div>
+
+  <!-- SİSTEM DURUMU ÖZETİ -->
+  <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: var(--radius-md); padding: 1.5rem 2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+    <div>
+      <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Aktif Veritabanı Durumu</div>
+      <div style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin-top: 2px;">
+        11.364 Araç Verisi • 5 Kaynaktan Pazar Temsiliyeti • PostgreSQL 16
+      </div>
+    </div>
+    <div>
+      <a href="/healthz" target="_blank" class="btn btn-secondary btn-sm" style="font-size: 0.85rem;">
+        🩺 /healthz Durumunu Gör
+      </a>
+    </div>
+  </div>
+</div>
+{{end}}

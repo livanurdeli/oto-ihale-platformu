@@ -19,6 +19,7 @@ type Config struct {
 	DBSSLMode  string
 
 	DatabaseURL string
+	JWTSecret   string
 }
 
 func LoadConfig() (*Config, error) {
@@ -34,6 +35,7 @@ func LoadConfig() (*Config, error) {
 		DBPassword: getEnv("DB_PASSWORD", "postgres"),
 		DBName:     getEnv("DB_NAME", "car_auction_db"),
 		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
+		JWTSecret:  getEnv("JWT_SECRET", "oto-ihale-platform-super-secret-jwt-key-2026"),
 	}
 
 	// Eğer DATABASE_URL tanımlıysa öncelikli kullan, değilse parametrelerden oluştur

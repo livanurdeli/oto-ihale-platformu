@@ -15,25 +15,49 @@ import (
 	"car-auction-platform/internal/db"
 )
 
+// ============================================================================
+// CMD / SEED / MAIN.GO: VERİ TABANI TOHUMLAMA (SEED) ARACI
+// ============================================================================
+//
+// BU DOSYA NE İŞE YARAR?
+// Bitirme projemizin yapay zekâ fiyat değerleme algoritması ve açık artırma sistemi için
+// elimizde 11.364 satırlık büyük bir araç veri seti bulunmaktadır (data/tum_veriler.csv).
+//
+// Bu araç:
+// 1. CSV dosyasındaki araç kayıtlarını (Marka, Model, Yıl, Kilometre, Fiyat, Hasar Durumu vb.) okur.
+// 2. Verileri temizler ve doğrular (sayısal dönüşümler, boşluk temizleme).
+// 3. PostgreSQL veritabanımızdaki 'listings' (ilanlar) tablosuna toplu (batch/transaction) olarak aktarır.
+//
+// NASIL ÇALIŞTIRILIR?
+// - İlk 100 aracı yüklemek için:   make seed
+// - Tüm 11.364 aracı yüklemek için: go run cmd/seed/main.go -limit 0
+// ============================================================================
+
 func main() {
+	// Terminal parametreleri:
+	// -limit: Kaç adet araç aktarılacağını belirler (Varsayılan: 100, 0 yazılırsa tüm CSV aktarılır)
+	// -file: Okunacak CSV dosyasının konumu (Varsayılan: data/tum_veriler.csv)
 	limitFlag := flag.Int("limit", 100, "Aktarılacak maksimum araç sayısı (0 ise tümü)")
 	filePathFlag := flag.String("file", "data/tum_veriler.csv", "Okunacak CSV dosya yolu")
 	flag.Parse()
 
 	log.Println("🌱 Seed / Veri İçe Aktarma Aracı Başlatılıyor...")
 
+	// 1. Ayarları (.env) oku
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("❌ Konfigürasyon okunamadı: %v", err)
 	}
 
+	// 2. PostgreSQL veritabanına bağlan
 	database, err := db.Connect(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("❌ Veritabanına bağlanılamadı: %v", err)
 	}
 	defer database.Close()
 
-	// 1. Örnek bir satıcı kullanıcısı oluştur veya al
+	// 3. İlanların sahibi olacak bir varsayılan demo kullanıcı oluştur veya ID'sini al
+	// Veritabanındaki 'listings' tablosu yabancı anahtar (foreign key) olarak bir user_id ister.
 	var defaultUserID int64
 	err = database.QueryRow(`
 		INSERT INTO users (email, password_hash, role, is_blocked)
@@ -44,34 +68,40 @@ func main() {
 	if err != nil {
 		log.Fatalf("❌ Varsayılan kullanıcı oluşturulamadı: %v", err)
 	}
-	log.Printf("👤 Varsayılan demo kullanıcı ID: %d", defaultUserID)
+	log.Printf("👤 İlanların atanacağı demo kullanıcı ID: %d", defaultUserID)
 
-	// 2. CSV dosyasını aç
+	// 4. CSV dosyasını diskten aç
 	file, err := os.Open(*filePathFlag)
 	if err != nil {
 		log.Fatalf("❌ CSV dosyası açılamadı (%s): %v", *filePathFlag, err)
 	}
 	defer file.Close()
 
+	// CSV okuyucusunu noktalı virgül (;) ayracıyla yapılandır
 	reader := csv.NewReader(bufio.NewReader(file))
-	reader.Comma = ';' // Noktalı virgül ayracı
+	reader.Comma = ';'
 
-	// Başlık satırı
+	// İlk satır başlıkları (marka, model, yil, km, fiyat vb.) içerir
 	header, err := reader.Read()
 	if err != nil {
 		log.Fatalf("❌ CSV başlığı okunamadı: %v", err)
 	}
 
+	// Başlıkların hangi sütun indeksinde olduğunu haritaya (map) dök
 	colMap := make(map[string]int)
 	for i, h := range header {
 		colMap[strings.TrimSpace(h)] = i
 	}
 
+	// 5. Veritabanı Transaction (İşlem) Başlat
+	// Tek tek sorgu atmak yerine yüzlerce veriyi tek bir transaction içinde hazırlayıp
+	// topluca onaylayarak aktarımı 50 kat daha hızlı hale getiriyoruz.
 	tx, err := database.Begin()
 	if err != nil {
 		log.Fatalf("❌ Transaction başlatılamadı: %v", err)
 	}
 
+	// Hazırlanmış SQL sorgusu (Prepared Statement)
 	stmt, err := tx.Prepare(`
 		INSERT INTO listings (
 			user_id, brand, model, year, mileage, fuel_type, transmission, city, description, estimated_price, damage_status, status
@@ -84,20 +114,23 @@ func main() {
 	defer stmt.Close()
 
 	importedCount := 0
+	// 6. CSV satırlarını tek tek döngüyle oku
 	for {
 		record, err := reader.Read()
 		if err == io.EOF {
-			break
+			break // Dosya sonuna gelindi
 		}
 		if err != nil {
 			log.Printf("⚠️ Satır okuma hatası, atlandı: %v", err)
 			continue
 		}
 
+		// Belirlenen limite ulaşıldıysa döngüyü bitir
 		if *limitFlag > 0 && importedCount >= *limitFlag {
 			break
 		}
 
+		// Sütun değerini güvenle çeken yardımcı fonksiyon
 		getVal := func(col string) string {
 			if idx, ok := colMap[col]; ok && idx < len(record) {
 				return strings.TrimSpace(record[idx])
@@ -114,11 +147,13 @@ func main() {
 		fuel := getVal("yakit_son")
 		title := getVal("baslik")
 
+		// 7. Kritik İş Kuralı: Hasar Durumu Değerlendirmesi
+		// Raporumuzdaki "Bilinmeyen hasar yok sayılmayacak" kuralı gereğince:
+		// Eğer boyasız/değişensiz/tramersiz bilgisi girilmemişse 'bilinmiyor' atanır.
 		boyasiz := getVal("boyasiz")
 		degisensiz := getVal("degisensiz")
 		tramersiz := getVal("tramersiz")
 
-		// Hasar durumu değerlendirmesi
 		damage := "bilinmiyor"
 		var damageDetails []string
 		if boyasiz != "" {
@@ -134,7 +169,7 @@ func main() {
 			damage = strings.Join(damageDetails, ", ")
 		}
 
-		// Sayısal dönüşümler
+		// 8. Sayısal veri dönüşümleri
 		year, _ := strconv.Atoi(yearStr)
 		if year == 0 {
 			year = 2020
@@ -147,8 +182,9 @@ func main() {
 			estimatedPrice = sql.NullFloat64{Float64: priceFloat, Valid: true}
 		}
 
-		transmission := "Otomatik" // CSV'de vites sütunu yoksa varsayılan
+		transmission := "Otomatik"
 
+		// 9. Veritabanına satırı ekle
 		_, err = stmt.Exec(
 			defaultUserID,
 			brand,
@@ -170,9 +206,10 @@ func main() {
 		importedCount++
 	}
 
+	// 10. Tüm eklemeleri kalıcı olarak veritabanına onayla (Commit)
 	if err := tx.Commit(); err != nil {
 		log.Fatalf("❌ Veriler veritabanına kaydedilemedi: %v", err)
 	}
 
-	log.Printf("🎉 Toplam %d araç başarıyla içe aktarıldı!", importedCount)
+	log.Printf("🎉 Toplam %d araç başarıyla PostgreSQL veritabanına içe aktarıldı!", importedCount)
 }

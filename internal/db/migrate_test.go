@@ -48,11 +48,13 @@ func TestMigrationFileSyntax(t *testing.T) {
 			if !strings.Contains(sqlText, "CREATE TABLE") {
 				t.Errorf("%s icerisinde CREATE TABLE ifadesi bekleniyordu", f.Name())
 			}
-			// Kontrol: users, listings, listing_photos, auctions, bids
-			requiredTables := []string{"users", "listings", "listing_photos", "auctions", "bids"}
-			for _, tbl := range requiredTables {
-				if !strings.Contains(sqlText, tbl) {
-					t.Errorf("%s tablosu %s dosyasinda bulunamadi", tbl, f.Name())
+			if strings.HasPrefix(f.Name(), "001_") {
+				// Kontrol: users, listings, listing_photos, auctions, bids
+				requiredTables := []string{"users", "listings", "listing_photos", "auctions", "bids"}
+				for _, tbl := range requiredTables {
+					if !strings.Contains(sqlText, tbl) {
+						t.Errorf("%s tablosu %s dosyasinda bulunamadi", tbl, f.Name())
+					}
 				}
 			}
 		}

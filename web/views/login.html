@@ -1,0 +1,66 @@
+{{define "content"}}
+<div style="max-width: 480px; margin: 2rem auto;">
+  <div style="background: white; border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: 2.5rem; border: 1px solid #e2e8f0;">
+    <div style="text-align: center; margin-bottom: 2rem;">
+      <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🔑</div>
+      <h2 style="font-size: 1.6rem; font-weight: 700; color: #0f172a;">Platforma Giriş Yap</h2>
+      <p style="color: #64748b; font-size: 0.9rem; margin-top: 0.25rem;">
+        E-posta ve şifrenizle oturum açın
+      </p>
+    </div>
+
+    <!-- HIZLI TEST HESAPLARI PANELİ -->
+    <div style="background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1.5rem;">
+      <div style="font-size: 0.78rem; font-weight: 700; color: #475569; text-transform: uppercase; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 4px;">
+        <span>⚡</span> Hızlı Test İçin Otomatik Doldur:
+      </div>
+      <div style="display: flex; gap: 0.5rem;">
+        <button type="button" onclick="fillCredentials('admin@otoihale.com', 'Admin123!')" class="btn btn-sm" style="flex: 1; background: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe; font-size: 0.8rem;">
+          👑 Admin Olarak Doldur
+        </button>
+        <button type="button" onclick="fillCredentials('kullanici@otoihale.com', 'User123!')" class="btn btn-sm" style="flex: 1; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-size: 0.8rem;">
+          👤 Üye Olarak Doldur
+        </button>
+      </div>
+    </div>
+
+    <form method="POST" action="/login" style="display: flex; flex-direction: column; gap: 1.25rem;">
+      <div>
+        <label for="email" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+          E-posta Adresi
+        </label>
+        <input type="email" id="email" name="email" required placeholder="ornek@otoihale.com"
+          style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none; transition: border-color 0.2s;"
+          onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
+      </div>
+
+      <div>
+        <label for="password" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+          Şifre
+        </label>
+        <input type="password" id="password" name="password" required placeholder="••••••••"
+          style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none; transition: border-color 0.2s;"
+          onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-size: 1rem; margin-top: 0.5rem;">
+        Giriş Yap
+      </button>
+    </form>
+
+    <div style="margin-top: 1.75rem; text-align: center; font-size: 0.9rem; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 1.25rem;">
+      Hesabınız yok mu?
+      <a href="/register" style="color: var(--primary); font-weight: 600; text-decoration: none;">
+        Hemen Kayıt Olun
+      </a>
+    </div>
+  </div>
+</div>
+
+<script>
+function fillCredentials(email, pwd) {
+  document.getElementById('email').value = email;
+  document.getElementById('password').value = pwd;
+}
+</script>
+{{end}}

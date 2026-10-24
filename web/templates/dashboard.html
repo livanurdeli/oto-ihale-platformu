@@ -1,0 +1,70 @@
+{{define "content"}}
+<div style="padding: 1rem 0;">
+  <!-- BAŞLIK & KARŞILAMA -->
+  <div style="background: white; border-radius: var(--radius-lg); padding: 2rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.5rem;">
+    <div>
+      <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+        <h1 style="font-size: 1.8rem; font-weight: 800; color: #0f172a;">Kullanıcı Paneli</h1>
+        {{if .IsAdmin}}
+          <span class="role-tag role-admin" style="font-size: 0.8rem; padding: 3px 10px;">👑 Yönetici</span>
+        {{else}}
+          <span class="role-tag role-user" style="font-size: 0.8rem; padding: 3px 10px;">👤 Standart Üye</span>
+        {{end}}
+      </div>
+      <p style="color: #64748b; font-size: 0.95rem;">
+        Hoş geldiniz, <strong>{{.User.Email}}</strong>. Oturumunuz güvenli çerez ile aktiftir.
+      </p>
+    </div>
+
+    <div style="display: flex; gap: 0.75rem;">
+      {{if .IsAdmin}}
+        <a href="/admin" class="btn" style="background: #7c3aed; color: white;">👑 Admin Paneline Git</a>
+      {{end}}
+      <form action="/logout" method="POST" style="margin: 0;">
+        <button type="submit" class="btn btn-danger">Güvenli Çıkış</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- KULLANICI DETAY KARTLARI -->
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <div style="background: white; border-radius: var(--radius-md); padding: 1.5rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
+      <div style="font-size: 0.82rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Kullanıcı Kimliği (ID)</div>
+      <div style="font-size: 1.8rem; font-weight: 800; color: #0f172a; margin-top: 0.35rem;">#{{.User.ID}}</div>
+    </div>
+
+    <div style="background: white; border-radius: var(--radius-md); padding: 1.5rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
+      <div style="font-size: 0.82rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Hesap Durumu</div>
+      <div style="font-size: 1.4rem; font-weight: 700; color: #10b981; margin-top: 0.5rem; display: flex; align-items: center; gap: 6px;">
+        <span>●</span> Aktif & Doğrulanmış
+      </div>
+    </div>
+
+    <div style="background: white; border-radius: var(--radius-md); padding: 1.5rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
+      <div style="font-size: 0.82rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Kayıt Tarihi</div>
+      <div style="font-size: 1.1rem; font-weight: 700; color: #334155; margin-top: 0.7rem;">
+        {{formatDate .User.CreatedAt}}
+      </div>
+    </div>
+  </div>
+
+  <!-- HAFTA 2 GÜVENLİK TEST KARTI -->
+  <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow);">
+    <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 0.75rem;">
+      🛡️ Güvenlik & Yetkilendirme Durumu
+    </h3>
+    <ul style="list-style: none; display: flex; flex-direction: column; gap: 0.6rem; color: #475569; font-size: 0.93rem;">
+      <li>✅ <strong>Bcrypt Şifreleme:</strong> Şifreniz açık metin olarak saklanmaz, hash olarak doğrulanır.</li>
+      <li>✅ <strong>Oturum Çerezi (HttpOnly):</strong> Oturumunuz <code>session_token</code> isimli güvenli çerezle taşınır.</li>
+      <li>
+        ✅ <strong>Yetkisiz Sayfa Koruması:</strong>
+        {{if .IsAdmin}}
+          Yönetici rolüne sahip olduğunuz için <a href="/admin" style="color: #7c3aed; font-weight: 600;">/admin</a> sayfasına tam erişim hakkınız vardır.
+        {{else}}
+          Standart kullanıcı rolünde olduğunuz için <a href="/admin" style="color: #2563eb; font-weight: 600;">/admin</a> sayfasına girmeyi denerseniz sistem sizi otomatik olarak <strong>403 Yetkisiz Erişim</strong> ile durdurur.
+        {{end}}
+      </li>
+    </ul>
+  </div>
+</div>
+{{end}}

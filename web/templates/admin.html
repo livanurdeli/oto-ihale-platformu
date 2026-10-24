@@ -1,0 +1,91 @@
+{{define "content"}}
+<div style="padding: 1rem 0;">
+  <!-- ADMIN BAŞLIK -->
+  <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); color: white; border-radius: var(--radius-lg); padding: 2.2rem; box-shadow: var(--shadow-lg); margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.5rem;">
+    <div>
+      <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem;">
+        <span style="font-size: 1.8rem;">👑</span>
+        <h1 style="font-size: 2rem; font-weight: 800;">Yönetici (Admin) Kontrol Paneli</h1>
+      </div>
+      <p style="color: #c7d2fe; font-size: 0.95rem;">
+        Bu sayfa <strong>yalnızca 'admin' rolündeki</strong> kullanıcılara açıktır. Yetkisiz kullanıcılar 403 ile engellenir.
+      </p>
+    </div>
+
+    <div>
+      <span class="role-tag role-admin" style="font-size: 0.9rem; padding: 6px 16px;">
+        🛡️ Süper Yönetici Yetkisi
+      </span>
+    </div>
+  </div>
+
+  <!-- KULLANICI LİSTESİ TABLOSU -->
+  <div style="background: white; border-radius: var(--radius-lg); box-shadow: var(--shadow); border: 1px solid #e2e8f0; overflow: hidden;">
+    <div style="padding: 1.25rem 1.75rem; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h2 style="font-size: 1.25rem; font-weight: 700; color: #0f172a;">Kayıtlı Kullanıcılar & Rol Yönetimi</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-top: 2px;">
+          Sistemdeki tüm kayıtlı kullanıcıların rolleri ve engelleme durumları
+        </p>
+      </div>
+    </div>
+
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+        <thead>
+          <tr style="background: #f8fafc; color: #475569; border-bottom: 1px solid #e2e8f0; font-weight: 600;">
+            <th style="padding: 0.85rem 1.25rem;">ID</th>
+            <th style="padding: 0.85rem 1.25rem;">E-posta</th>
+            <th style="padding: 0.85rem 1.25rem;">Rol</th>
+            <th style="padding: 0.85rem 1.25rem;">Durum</th>
+            <th style="padding: 0.85rem 1.25rem;">Kayıt Tarihi</th>
+            <th style="padding: 0.85rem 1.25rem; text-align: right;">Yönetici İşlemi</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Data}}
+            <tr style="border-bottom: 1px solid #f1f5f9; transition: background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
+              <td style="padding: 0.85rem 1.25rem; font-weight: 700; color: #64748b;">#{{.ID}}</td>
+              <td style="padding: 0.85rem 1.25rem; font-weight: 600; color: #0f172a;">{{.Email}}</td>
+              <td style="padding: 0.85rem 1.25rem;">
+                {{if .IsAdmin}}
+                  <span class="role-tag role-admin">👑 Admin</span>
+                {{else}}
+                  <span class="role-tag role-user">👤 User</span>
+                {{end}}
+              </td>
+              <td style="padding: 0.85rem 1.25rem;">
+                {{if .IsBlocked}}
+                  <span style="background: #fee2e2; color: #b91c1c; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 10px;">
+                    ⛔ Engelli
+                  </span>
+                {{else}}
+                  <span style="background: #ecfdf5; color: #047857; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 10px;">
+                    ✅ Aktif
+                  </span>
+                {{end}}
+              </td>
+              <td style="padding: 0.85rem 1.25rem; color: #64748b;">
+                {{formatDate .CreatedAt}}
+              </td>
+              <td style="padding: 0.85rem 1.25rem; text-align: right;">
+                <form action="/admin/users/{{.ID}}/toggle-block" method="POST" style="margin: 0; display: inline;">
+                  {{if .IsBlocked}}
+                    <button type="submit" class="btn btn-sm btn-secondary" style="color: #047857; border-color: #a7f3d0;">
+                      Engeli Kaldır
+                    </button>
+                  {{else}}
+                    <button type="submit" class="btn btn-sm btn-danger">
+                      Engelle
+                    </button>
+                  {{end}}
+                </form>
+              </td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}

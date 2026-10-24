@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.Title}} - Otoİhale Platformu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <a href="/" class="nav-brand">
+      <div class="brand-icon">🚗</div>
+      <div>
+        <span>Otoİhale</span>
+        <span class="brand-sub">SOLID Mimari</span>
+      </div>
+    </a>
+
+    <ul class="nav-links">
+      <li><a href="/" class="nav-link {{if eq .ActiveNav "home"}}active{{end}}">Ana Sayfa</a></li>
+      {{if .IsAuthenticated}}
+        <li><a href="/dashboard" class="nav-link {{if eq .ActiveNav "dashboard"}}active{{end}}">Kullanıcı Paneli</a></li>
+        {{if .IsAdmin}}
+          <li><a href="/admin" class="nav-link {{if eq .ActiveNav "admin"}}active{{end}}" style="color: #c084fc; font-weight: 600;">👑 Admin Paneli</a></li>
+        {{end}}
+      {{end}}
+    </ul>
+
+    <div class="nav-auth">
+      {{if .IsAuthenticated}}
+        <div class="user-badge">
+          <span>👤 {{.User.Email}}</span>
+          {{if .IsAdmin}}
+            <span class="role-tag role-admin">Yönetici</span>
+          {{else}}
+            <span class="role-tag role-user">Üye</span>
+          {{end}}
+        </div>
+        <form action="/logout" method="POST" style="margin: 0;">
+          <button type="submit" class="btn btn-sm btn-danger">Çıkış Yap</button>
+        </form>
+      {{else}}
+        <a href="/login" class="btn btn-secondary btn-sm">Giriş Yap</a>
+        <a href="/register" class="btn btn-primary btn-sm">Kayıt Ol</a>
+      {{end}}
+    </div>
+  </header>
+
+  <!-- CONTENT ALANI -->
+  <main class="main-container">
+    {{if .Error}}
+      <div class="alert alert-error">
+        <span>⚠️</span>
+        <div>{{.Error}}</div>
+      </div>
+    {{end}}
+    {{if .Success}}
+      <div class="alert alert-success">
+        <span>✅</span>
+        <div>{{.Success}}</div>
+      </div>
+    {{end}}
+
+    {{template "content" .}}
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="footer">
+    <p>© 2026 İkinci El Araç Açık Artırma ve Yapay Zekâ Değerleme Platformu | SOLID Mimari & Temiz Katmanlar</p>
+    <p style="margin-top: 6px; font-size: 0.8rem; color: #64748b;">
+      Backend (Clean Architecture & SOLID) • Frontend (Web Templates & CSS Ayrımı)
+    </p>
+  </footer>
+
+</body>
+</html>

@@ -1,5 +1,3 @@
--- 001_initial_schema.sql
--- Hafta 1: Başlangıç Veritabanı Şeması
 
 -- 1. USERS TABLOSU
 CREATE TABLE IF NOT EXISTS users (

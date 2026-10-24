@@ -24,34 +24,61 @@ Bu proje; kullanıcıların ikinci el araçlarını açık artırma yöntemiyle 
 
 ---
 
-## 📂 Proje Dizin Yapısı
+## 📅 Hafta 2 Kapsamı ve Yapılanlar (Üyelik & Güvenlik Sistemi)
+
+- [x] **Bcrypt ile Şifre Saklama (`internal/auth/auth.go`)**: Açık metin şifreler veritabanına asla yazılmaz; `golang.org/x/crypto/bcrypt` ile güvenli şekilde hash'lenir ve doğrulanır.
+- [x] **Oturum Çerezi (Session Cookie) Yönetimi (`internal/repository/user_repository.go`)**: Kriptografik güvenli 64 karakter oturum belirteçleri oluşturulur; `HttpOnly`, `SameSite=Lax` korumalı `session_token` çereziyle taşınır. `sessions` tablosu migration 002 ile veritabanına bağlandı.
+- [x] **Kullanıcı ve Admin Rolleri**:
+  - `user`: Standart üye rolü. İlanları ve kendi panelini görüntüleyebilir.
+  - `admin`: Sistem yöneticisi rolü. Tüm kayıtlı kullanıcıları ve rolleri listeler, kullanıcıları engelleyebilir/açabilir.
+- [x] **Yetkilendirme Middleware Katmanı (`internal/middleware/auth.go`)**:
+  - `AuthMiddleware`: Her istekte çerezi denetler ve oturumu context'e enjekte eder.
+  - `RequireAuth`: Giriş yapmamış kullanıcıları yakalar; webde `/login?redirect=...` yönlendirmesi, API'da `401 Unauthorized` döner.
+  - `RequireAdmin`: Admin rolü olmayan kullanıcıları engeller; webde şık `/403` Yetkisiz Erişim sayfasına yönlendirir, API'da `403 Forbidden` döner.
+- [x] **Temel Sayfa Şablonu (Modern Web UI & Layout)**:
+  - `Navbar`: Dinamik oturum durumu (Giriş/Kayıt butonları veya Kullanıcı E-postası, Rol Rozeti [Admin/Üye], Panel ve Çıkış butonları).
+  - `/` (Ana Sayfa): Zengin hero alanı, platform istatistikleri ve dinamik karşılama.
+  - `/login` (Giriş Yap): E-posta ve şifre formu + tek tıkla test için **Hızlı Test Hesapları** doldurma butonları.
+  - `/register` (Kayıt Ol): E-posta, şifre, şifre doğrulaması ve test amaçlı rol seçimi.
+  - `/dashboard` (Kullanıcı Paneli): Korumalı sayfa (`RequireAuth`). Kullanıcı ID, rol, kayıt tarihi ve durum bilgisi.
+  - `/admin` (Yönetici Paneli): Korumalı sayfa (`RequireAdmin`). Tüm kayıtlı kullanıcıların rolleri, engelleme butonları ve sistem istatistikleri.
+  - `/403` (Yetkisiz Erişim): Yetkisi olmayan kullanıcılara açık ve bilgilendirici uyarı ekranı.
+- [x] **Hazır Test Hesapları**:
+  - 👑 **Yönetici:** `admin@otoihale.com` / `Admin123!`
+  - 👤 **Standart Üye:** `kullanici@otoihale.com` / `User123!`
+- [x] **Kapsamlı Birim ve Entegrasyon Testleri**: Şifreleme, oturum tokenı, e-posta normalizasyonu ve yetkilendirme middleware testleri (`go test ./...`).
+
+---
+
+## 📂 Proje Dizin Yapısı (MVC & Clean Architecture)
 
 ```
 .
 ├── Makefile                     # Hızlı komutlar
 ├── README.md                    # Proje dokümantasyonu
 ├── docker-compose.yml           # PostgreSQL veritabanı servisi
-├── .env.example                 # Örnek çevre değişkenleri
+├── .env.example                 # Örnek çevre değişkenleri (JWT_SECRET dahil)
 ├── .env                         # Yerel ortam değişkenleri
 ├── cmd/
-│   ├── server/                  # Sunucu giriş noktası
-│   │   └── main.go
-│   └── seed/                    # CSV veri aktarım aracı
-│       └── main.go
+│   ├── server/main.go           # Sunucu giriş noktası (Routes & Dependency Injection)
+│   └── seed/main.go             # CSV veri aktarım aracı
 ├── data/
 │   └── tum_veriler.csv          # 11.364 satırlık araç veri seti
 ├── internal/
-│   ├── config/                  # Konfigürasyon okuyucu
-│   │   └── config.go
-│   ├── db/                      # DB bağlantısı ve Migration yöneticisi
-│   │   ├── db.go
-│   │   ├── migrate.go
-│   │   └── migrate_test.go
-│   └── handlers/                # HTTP Handler'ları
-│       ├── health.go
-│       └── health_test.go
+│   ├── models/                  # 🟢 [M - MODEL]: Veritabanı ve JWT Varlıkları (User, JWTClaims)
+│   ├── controllers/             # 🟡 [C - CONTROLLER]: HTTP İstek Yöneticileri (Auth, Health, ViewRenderer)
+│   ├── services/                # [Service]: İş Mantığı & JWT Üretim/Doğrulama (AuthService)
+│   ├── repository/              # [Repository]: SQL Sorguları & Interfaces (Clean Architecture)
+│   ├── middlewares/             # [Middleware]: Hibrit JWT Doğrulama (Cookie + Bearer Header) & Yetkilendirme
+│   ├── auth/                    # [Security Core]: Bcrypt Şifreleme & JWT HS256 Çekirdeği
+│   ├── config/                  # Konfigürasyon okuyucu (.env & JWT_SECRET)
+│   └── db/                      # DB bağlantısı ve Migration yöneticisi
+├── web/
+│   ├── views/                   # 🔵 [V - VIEW]: HTML Görünüm Şablonları (layout, home, login, admin, vb.)
+│   └── static/css/style.css     # Tasarım Sistemi & Vanilla CSS
 └── migrations/
-    └── 001_initial_schema.sql   # İlk 5 tablonun DDL şeması
+    ├── 001_initial_schema.sql   # İlk 5 tablonun DDL şeması
+    └── 002_create_sessions_table.sql # Sessions tablosu ve indeksleri
 ```
 
 ---
