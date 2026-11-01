@@ -1,35 +1,9 @@
-// ============================================================================
-// CMD / SERVER / MAIN.GO: ANA WEB VE API SUNUCUSU GİRİŞ NOKTASI (ENTRYPOINT)
-// ============================================================================
-//
-// BU DOSYA NE İŞE YARAR?
-// Bu dosya, projenin ana kalbidir. Web sitemizi ve backend API'mizi ayağa kaldıran
-// programın başlangıç (main) fonksiyonunu içerir.
-//
-// YÜRÜTTÜĞÜ GÖREVLER (ADIM ADIM):
-// 1. Konfigürasyonu (.env dosyasını ve port/şifre ayarlarını) yükler.
-// 2. PostgreSQL veritabanına bağlantı havuzu (connection pool) kurar.
-// 3. Veritabanı tablolarını otomatik oluşturur (Migrations).
-// 4. SOLID & MVC mimarisi gereği katmanları birbirine bağlar (Dependency Injection):
-//    - [Repository]: Veritabanı SQL sorgularını yönetir.
-//    - [Service]: İş mantığı, şifreleme (bcrypt) ve JWT token yönetimini yürütür.
-//    - [Controller]: HTTP isteklerini yakalar, JSON API veya HTML View döndürür.
-// 5. Statik CSS/JS dosyalarını (/static/*) tarayıcılara sunar.
-// 6. Sayfaların ve API rotalarının (Routes) adreslerini belirler.
-// 7. Sunucuyu belirtilen portta (örn: 8080) dinlemeye açar.
-// 8. Kapatma sinyali (Ctrl+C / SIGINT / SIGTERM) geldiğinde sunucuyu ve veritabanı
-//    bağlantılarını güvenle kapatır (Graceful Shutdown).
-//
-// NASIL ÇALIŞTIRILIR?
-// - Terminalden doğrudan:  go run cmd/server/main.go
-// - Makefile ile:         make run
-// ============================================================================
-
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,21 +15,30 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"car-auction-platform/internal/auth"
 	"car-auction-platform/internal/config"
 	"car-auction-platform/internal/controllers"
 	"car-auction-platform/internal/db"
 	"car-auction-platform/internal/middlewares"
+	"car-auction-platform/internal/models"
 	"car-auction-platform/internal/repository"
 	"car-auction-platform/internal/services"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("❌ Uygulama hatası: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	log.Println("🚀 Araç Açık Artırma & Değerleme Platformu Sunucusu Başlatılıyor...")
 
 	// 1. Ayarları oku (.env ve ortam değişkenleri)
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("❌ Konfigürasyon yüklenemedi: %v", err)
+		return fmt.Errorf("konfigürasyon yüklenemedi: %w", err)
 	}
 	log.Printf("⚙️  Ortam: %s | Port: %s | Veritabanı: %s:%s/%s",
 		cfg.ServerEnv, cfg.ServerPort, cfg.DBHost, cfg.DBPort, cfg.DBName)
@@ -63,119 +46,137 @@ func main() {
 	// 2. Veritabanına bağlan
 	database, err := db.Connect(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("❌ Veritabanı bağlantı hatası: %v", err)
+		return fmt.Errorf("veritabanı bağlantı hatası: %w", err)
 	}
 	defer func() {
 		log.Println("🔌 Veritabanı bağlantısı kapatılıyor...")
-		if err := database.Close(); err != nil {
-			log.Printf("⚠️  Veritabanı kapatılırken hata: %v", err)
+		if closeErr := database.Close(); closeErr != nil {
+			log.Printf("⚠️  Veritabanı kapatılırken hata: %v", closeErr)
 		}
 	}()
 	log.Println("✅ Veritabanı bağlantısı başarıyla kuruldu.")
 
 	// 3. Migration'ları çalıştır
 	if err := db.RunMigrations(database.DB, ""); err != nil {
-		log.Fatalf("❌ Migration çalıştırma hatası: %v", err)
+		return fmt.Errorf("migration çalıştırma hatası: %w", err)
 	}
 
 	// 4. MVC Mimari Katmanlarını Başlat
-	// [MODEL & REPOSITORY]: Veritabanı erişim katmanı
 	userRepo := repository.NewUserRepository(database.DB)
 
-	// Test kolaylığı için sistemde admin@otoihale.com ve kullanici@otoihale.com yoksa oluşturulur.
-	if err := userRepo.EnsureDefaultUsers(context.Background()); err != nil {
-		log.Printf("⚠️  Varsayılan kullanıcılar oluşturulurken uyarı: %v", err)
-	} else {
-		log.Println("✅ Varsayılan admin ve kullanıcı hesapları hazırlandı (admin@otoihale.com / kullanici@otoihale.com)")
+	// GÜVENLİK: Varsayılan test hesapları SADECE development ortamında oluşturulur!
+	if cfg.ServerEnv == "development" {
+		adminHash, _ := auth.HashPassword("Admin123!")
+		userHash, _ := auth.HashPassword("User123!")
+
+		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "admin@otoihale.com", adminHash, models.RoleAdmin)
+		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "kullanici@otoihale.com", userHash, models.RoleUser)
+		log.Println("✅ [Development] Varsayılan test hesapları kontrol edildi (admin@otoihale.com / kullanici@otoihale.com)")
 	}
 
-	// [SERVICE]: JWT (JSON Web Token) tabanlı oturum ve iş mantığı servisi
+	// [SERVICE]: İş mantığı servisi
 	authService := services.NewAuthService(userRepo, cfg.JWTSecret)
 
-	// [C - CONTROLLER]: HTTP İstek Denetleyicisi ve View çağrıcısı
+	// [CONTROLLER]: HTTP denetleyicisi
 	authController, err := controllers.NewAuthController(authService)
 	if err != nil {
-		log.Fatalf("❌ AuthController başlatılamadı: %v", err)
+		return fmt.Errorf("AuthController başlatılamadı: %w", err)
 	}
 
-	// 5. HTTP Router ve Rotaları Tanımla
+	// 4.1 İlan Katmanı (Repository, Service, Controller)
+	uploadsDir, _ := filepath.Abs("uploads")
+	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		return fmt.Errorf("uploads klasörü oluşturulamadı: %w", err)
+	}
+
+	listingRepo := repository.NewListingRepository(database.DB)
+	listingService := services.NewListingService(listingRepo)
+	listingController, err := controllers.NewListingController(listingService, uploadsDir)
+	if err != nil {
+		return fmt.Errorf("ListingController başlatılamadı: %w", err)
+	}
+
+	// 5. HTTP Router ve Middleware Zinciri
 	r := chi.NewRouter()
 
-	// Temel Güvenlik ve İzleme Middleware'leri
-	r.Use(middleware.RequestID) // Her isteğe benzersiz takip numarası verir
-	r.Use(middleware.RealIP)    // İstemcinin gerçek IP adresini tespit eder
-	r.Use(middleware.Logger)    // Her HTTP isteğini konsola renkli log olarak basar
-	r.Use(middleware.Recoverer) // Bir handler çökerse (panic) sunucunun kapanmasını engeller
-	r.Use(middleware.Timeout(60 * time.Second)) // Uzun süren takılı istekleri zaman aşımına uğratır
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	// Timeout uyumu: Middleware timeout'u 30 saniye, sunucu WriteTimeout'u 45 saniye
+	r.Use(middleware.Timeout(30 * time.Second))
 
-	// JWT Kimlik Doğrulama Middleware'i:
-	// Hem HttpOnly 'auth_token' çerezini hem de 'Authorization: Bearer <token>' başlığını çözer.
-	r.Use(middlewares.JWTMiddleware(cfg.JWTSecret))
+	// JWT Kimlik Doğrulama: Anlık is_blocked ve rol kontrolü için userRepo'yu checker olarak iletir
+	r.Use(middlewares.JWTMiddleware(cfg.JWTSecret, userRepo))
 
-	// -------------------------------------------------------------
-	// STATİK DOSYALAR (Frontend: CSS, JS, İkonlar)
-	// -------------------------------------------------------------
+	// Statik Dosyalar (/static/*)
 	staticDir := filepath.Join(controllers.FindViewsDir(), "..", "static")
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 
-	// -------------------------------------------------------------
-	// [V - VIEW] HERKESE AÇIK SAYFALAR (Ziyaretçiler ve Giriş Yapmış Üyeler)
-	// -------------------------------------------------------------
-	r.Get("/", authController.Home)                  // Ana sayfa görünümü
-	r.Get("/login", authController.LoginPage)        // Giriş formu görünümü
-	r.Post("/login", authController.LoginPost)       // Giriş yapma ve JWT çerezi üretme
-	r.Get("/register", authController.RegisterPage)  // Kayıt formu görünümü
-	r.Post("/register", authController.RegisterPost) // Kayıt olma ve JWT çerezi üretme
-	r.Post("/logout", authController.Logout)         // JWT çerezini silerek çıkış yapma
-	r.Get("/403", authController.Forbidden)          // 403 Yetkisiz erişim görünümü
+	// Yüklenen Fotoğraflar (/uploads/*)
+	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))))
 
 	// -------------------------------------------------------------
-	// KORUMALI KULLANICI SAYFALARI (Giriş Yapmış Olmak Zorunludur)
-	// RequireAuth: JWT doğrulaması olmayan kullanıcıyı /login'e yönlendirir.
+	// SAYFALAR (HTML Views)
 	// -------------------------------------------------------------
+	r.Get("/", authController.Home)
+	r.Get("/login", authController.LoginPage)
+	r.Post("/login", authController.LoginPost)
+	r.Get("/register", authController.RegisterPage)
+	r.Post("/register", authController.RegisterPost)
+	r.Post("/logout", authController.Logout)
+	r.Get("/403", authController.Forbidden)
+
+	// İlan Sayfaları (Herkese Açık)
+	r.Get("/listings", listingController.ListingsPage)
+	r.Get("/listings/{id:[0-9]+}", listingController.ListingDetailPage)
+
+	// Korumalı Kullanıcı Sayfaları
 	r.Group(func(protected chi.Router) {
 		protected.Use(middlewares.RequireAuth)
-		protected.Get("/dashboard", authController.Dashboard) // Kullanıcı paneli görünümü
+		protected.Get("/dashboard", authController.Dashboard)
+
+		// İlan Yönetimi (Giriş Gerekli)
+		protected.Get("/listings/new", listingController.NewListingPage)
+		protected.Post("/listings", listingController.CreateListingPost)
+		protected.Get("/my/listings", listingController.MyListingsPage)
+		protected.Get("/listings/{id:[0-9]+}/edit", listingController.EditListingPage)
+		protected.Post("/listings/{id:[0-9]+}/edit", listingController.EditListingPost)
+		protected.Post("/listings/{id:[0-9]+}/delete", listingController.DeleteListingPost)
 	})
 
-	// -------------------------------------------------------------
-	// KORUMALI YÖNETİCİ SAYFALARI (Yalnızca Admin Rolüne Açıktır)
-	// RequireAdmin: JWT claims içinde rolü 'admin' olmayan kullanıcıyı /403 sayfasına atar.
-	// -------------------------------------------------------------
+	// Korumalı Yönetici Sayfaları
 	r.Group(func(admin chi.Router) {
 		admin.Use(middlewares.RequireAdmin)
-		admin.Get("/admin", authController.Admin) // Admin paneli görünümü
-		admin.Post("/admin/users/{id}/toggle-block", authController.AdminToggleBlock) // Kullanıcı engelleme/açma
+		admin.Get("/admin", authController.Admin)
+		admin.Post("/admin/users/{id}/toggle-block", authController.AdminToggleBlock)
 	})
 
 	// -------------------------------------------------------------
-	// REST API UÇ NOKTALARI (/api/auth/...) - JWT Bearer Token Destekli
+	// REST API UÇ NOKTALARI (/api/auth/...)
 	// -------------------------------------------------------------
 	r.Route("/api/auth", func(api chi.Router) {
-		api.Post("/register", authController.APIRegister) // JSON ile kayıt -> JWT Token döner
-		api.Post("/login", authController.APILogin)       // JSON ile giriş -> JWT Token döner
-		api.Post("/logout", authController.Logout)        // Çıkış
+		api.Post("/register", authController.APIRegister)
+		api.Post("/login", authController.APILogin)
+		api.Post("/logout", authController.Logout)
 
-		// JWT Doğrulaması zorunlu API uç noktası
 		api.Group(func(authed chi.Router) {
 			authed.Use(middlewares.RequireAuth)
-			authed.Get("/me", authController.APIMe) // Kullanıcı JWT claims bilgisi
+			authed.Get("/me", authController.APIMe)
 		})
 	})
 
-	// Sağlık kontrolü (Database ping testi)
 	r.Get("/healthz", controllers.HealthCheckController(database.DB))
 
-	// 5. HTTP Sunucusu Hazırla
+	// 6. HTTP Sunucusu Hazırla
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 45 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 6. Sunucuyu arka planda (goroutine) başlat
 	serverErrors := make(chan error, 1)
 	go func() {
 		log.Printf("🌐 HTTP Sunucusu dinliyor: http://localhost:%s", cfg.ServerPort)
@@ -184,18 +185,17 @@ func main() {
 		}
 	}()
 
-	// 7. Ctrl+C ve SIGTERM sinyallerini dinle (Graceful Shutdown)
+	// 7. Graceful Shutdown
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
 
 	select {
 	case err := <-serverErrors:
-		log.Fatalf("❌ Sunucu başlatılamadı: %v", err)
+		return fmt.Errorf("sunucu hatası: %w", err)
 
 	case sig := <-shutdownChan:
 		log.Printf("🛑 Kapanma sinyali alındı (%v). Sunucu güvenli biçimde durduruluyor...", sig)
 
-		// Açık isteklerin tamamlanması için 10 saniye süre tanı
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -206,4 +206,6 @@ func main() {
 
 		log.Println("👋 Sunucu düzgün biçimde sonlandırıldı.")
 	}
+
+	return nil
 }

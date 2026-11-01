@@ -23,7 +23,9 @@
 
     <ul class="nav-links">
       <li><a href="/" class="nav-link {{if eq .ActiveNav "home"}}active{{end}}">Ana Sayfa</a></li>
+      <li><a href="/listings" class="nav-link {{if eq .ActiveNav "listings"}}active{{end}}">İlanlar</a></li>
       {{if .IsAuthenticated}}
+        <li><a href="/my/listings" class="nav-link {{if eq .ActiveNav "my_listings"}}active{{end}}">İlanlarım</a></li>
         <li><a href="/dashboard" class="nav-link {{if eq .ActiveNav "dashboard"}}active{{end}}">Kullanıcı Paneli</a></li>
         {{if .IsAdmin}}
           <li><a href="/admin" class="nav-link {{if eq .ActiveNav "admin"}}active{{end}}" style="color: #c084fc; font-weight: 600;">👑 Admin Paneli</a></li>

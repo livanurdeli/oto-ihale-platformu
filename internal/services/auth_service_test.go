@@ -14,7 +14,7 @@ type MockUserRepository struct {
 	users map[string]*models.User
 }
 
-func (m *MockUserRepository) CreateUser(ctx context.Context, email, passwordHash, role string) (*models.User, error) {
+func (m *MockUserRepository) CreateUser(ctx context.Context, email, passwordHash string, role models.Role) (*models.User, error) {
 	if _, exists := m.users[email]; exists {
 		return nil, repository.ErrEmailAlreadyTaken
 	}
@@ -47,10 +47,19 @@ func (m *MockUserRepository) GetUserByID(ctx context.Context, id int64) (*models
 	return nil, repository.ErrUserNotFound
 }
 
-func (m *MockUserRepository) GetAllUsers(ctx context.Context) ([]*models.User, error) {
-	var list []*models.User
+func (m *MockUserRepository) GetUserStatus(ctx context.Context, id int64) (models.Role, bool, error) {
 	for _, u := range m.users {
-		list = append(list, u)
+		if u.ID == id {
+			return u.Role, u.IsBlocked, nil
+		}
+	}
+	return "", false, repository.ErrUserNotFound
+}
+
+func (m *MockUserRepository) GetAllUsers(ctx context.Context) ([]*models.UserDTO, error) {
+	var list []*models.UserDTO
+	for _, u := range m.users {
+		list = append(list, u.ToDTO())
 	}
 	return list, nil
 }
@@ -65,29 +74,32 @@ func (m *MockUserRepository) ToggleUserBlock(ctx context.Context, id int64) erro
 	return repository.ErrUserNotFound
 }
 
-func (m *MockUserRepository) EnsureDefaultUsers(ctx context.Context) error {
+func (m *MockUserRepository) CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash string, role models.Role) error {
 	return nil
 }
 
 func TestJWTAuthServiceFlow(t *testing.T) {
 	userRepo := &MockUserRepository{users: make(map[string]*models.User)}
-	jwtSecret := "test-secret-key-456"
+	jwtSecret := "test-secret-key-45601234567890123456"
 	svc := NewAuthService(userRepo, jwtSecret)
 	ctx := context.Background()
 
 	// 1. Şifre eşleşmeme testi
-	_, _, _, err := svc.Register(ctx, "test@jwt.com", "Password123!", "FarkliSifre!", "user")
+	_, _, _, err := svc.Register(ctx, "test@jwt.com", "Password123!", "FarkliSifre!")
 	if !errors.Is(err, ErrPasswordsDoNotMatch) {
 		t.Errorf("Beklenen ErrPasswordsDoNotMatch, alınan: %v", err)
 	}
 
-	// 2. Başarılı Kayıt ve JWT Üretimi
-	user, token, expiresAt, err := svc.Register(ctx, "test@jwt.com", "Password123!", "Password123!", "user")
+	// 2. Başarılı Kayıt ve JWT Üretimi (Rol varsayılan user olmalı)
+	user, token, expiresAt, err := svc.Register(ctx, "test@jwt.com", "Password123!", "Password123!")
 	if err != nil {
 		t.Fatalf("Register başarısız: %v", err)
 	}
 	if user.Email != "test@jwt.com" || token == "" {
 		t.Error("Kullanıcı e-postası veya JWT token boş olamaz")
+	}
+	if user.Role != models.RoleUser {
+		t.Errorf("Kayıt olan kullanıcının rolü RoleUser olmalıdır, alınan: %s", user.Role)
 	}
 	if expiresAt.Before(time.Now()) {
 		t.Error("JWT süresi geçmişte olamaz")
@@ -98,7 +110,7 @@ func TestJWTAuthServiceFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Üretilen JWT doğrulanamadı: %v", err)
 	}
-	if claims.UserID != user.ID || claims.Email != user.Email || claims.Role != "user" {
+	if claims.UserID != user.ID || claims.Email != user.Email || claims.Role != models.RoleUser {
 		t.Errorf("JWT claims uyuşmuyor: %+v", claims)
 	}
 
@@ -111,8 +123,19 @@ func TestJWTAuthServiceFlow(t *testing.T) {
 		t.Error("Giriş bilgileri uyuşmuyor")
 	}
 
-	// 5. Engelli Kullanıcı Girişi
-	_ = svc.ToggleUserBlock(ctx, user.ID)
+	// 5. Kendi hesabını engellememe testi
+	err = svc.ToggleUserBlock(ctx, user.ID, user.ID)
+	if !errors.Is(err, ErrCannotBlockSelf) {
+		t.Errorf("Kendi hesabını engellemeye çalışırken ErrCannotBlockSelf bekleniyordu, alınan: %v", err)
+	}
+
+	// 6. Başka hesabı engelleme ve engelli kullanıcı girişi
+	adminID := int64(999)
+	err = svc.ToggleUserBlock(ctx, adminID, user.ID)
+	if err != nil {
+		t.Fatalf("ToggleUserBlock başarısız: %v", err)
+	}
+
 	_, _, _, err = svc.Login(ctx, "test@jwt.com", "Password123!")
 	if !errors.Is(err, ErrUserIsBlocked) {
 		t.Errorf("Engelli kullanıcı için beklenen ErrUserIsBlocked, alınan: %v", err)

@@ -9,61 +9,71 @@ import (
 	"car-auction-platform/internal/models"
 )
 
-// ============================================================================
-// MVC MIDDLEWARE KATMANI: JWT KİMLİK DOĞRULAMA & YETKİLENDİRME
-// ============================================================================
-
 type contextKey string
 
 const (
-	// UserContextKey: Token'dan çözülen kullanıcı bilgilerini context'te saklama anahtarı.
 	UserContextKey contextKey = "jwt_authenticated_user"
-
-	// JWTCookieName: Tarayıcıda JWT'yi taşıyan HttpOnly çerezin adı.
-	JWTCookieName = "auth_token"
+	JWTCookieName             = "auth_token"
 )
 
-// JWTMiddleware fonksiyonu:
-// HİBRİT ÇALIŞIR:
-// 1. Tarayıcı isteklerinde: 'auth_token' isimli HttpOnly çerezi okur.
-// 2. REST API / Mobil isteklerinde: 'Authorization: Bearer <jwt>' başlığını okur.
-// Token geçerliyse, token içindeki claims (kullanıcı ID, email, rol) doğrudan r.Context() içine enjekte edilir.
-func JWTMiddleware(jwtSecret string) func(http.Handler) http.Handler {
+// UserStatusChecker, token doğrulaması sonrası kullanıcının engellenme ve güncel rol durumunu kontrol eden arayüzdür.
+type UserStatusChecker interface {
+	GetUserStatus(ctx context.Context, userID int64) (models.Role, bool, error)
+}
+
+// JWTMiddleware hem çerezden hem Authorization başlığından JWT'yi okur,
+// ardından veritabanından kullanıcının engellenip engellenmediğini ve güncel rolünü doğrular.
+func JWTMiddleware(jwtSecret string, checker UserStatusChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenString := extractToken(r)
 			if tokenString == "" {
-				// Anonim istek
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// JWT imzasını doğrula ve claims bilgilerini çöz
 			claims, err := auth.ValidateJWT(tokenString, jwtSecret)
 			if err != nil {
-				// Geçersiz / süresi dolmuş token: Çerezi temizle
-				http.SetCookie(w, &http.Cookie{
-					Name:     JWTCookieName,
-					Value:    "",
-					Path:     "/",
-					MaxAge:   -1,
-					HttpOnly: true,
-				})
+				clearAuthCookie(w)
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// Kullanıcı nesnesini context'e bağla
-			user := &models.User{
-				ID:    claims.UserID,
-				Email: claims.Email,
-				Role:  claims.Role,
+			// Veritabanından anlık engellenme ve rol kontrolü (Stale Token / Block Bypass önleme)
+			currentRole := claims.Role
+			if checker != nil {
+				dbRole, isBlocked, err := checker.GetUserStatus(r.Context(), claims.UserID)
+				if err != nil || isBlocked {
+					// Kullanıcı silinmiş veya admin tarafından engellenmiş: Oturumu düşür
+					clearAuthCookie(w)
+					next.ServeHTTP(w, r)
+					return
+				}
+				currentRole = dbRole
 			}
 
-			ctx := context.WithValue(r.Context(), UserContextKey, user)
+			// Context'e PasswordHash içermeyen güvenli UserDTO nesnesini ekle
+			userDTO := &models.UserDTO{
+				ID:    claims.UserID,
+				Email: claims.Email,
+				Role:  currentRole,
+			}
+
+			ctx := context.WithValue(r.Context(), UserContextKey, userDTO)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     JWTCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // RequireAuth, sisteme giriş yapmış olmayı zorunlu kılar.
@@ -99,7 +109,7 @@ func RequireAdmin(next http.Handler) http.Handler {
 			return
 		}
 
-		if !user.IsAdmin() {
+		if user.Role != models.RoleAdmin {
 			if isAPIRequest(r) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
@@ -115,8 +125,8 @@ func RequireAdmin(next http.Handler) http.Handler {
 }
 
 // GetUserFromContext, context'ten kullanıcının kimliğini döner.
-func GetUserFromContext(ctx context.Context) *models.User {
-	if user, ok := ctx.Value(UserContextKey).(*models.User); ok {
+func GetUserFromContext(ctx context.Context) *models.UserDTO {
+	if user, ok := ctx.Value(UserContextKey).(*models.UserDTO); ok {
 		return user
 	}
 	return nil
@@ -124,13 +134,11 @@ func GetUserFromContext(ctx context.Context) *models.User {
 
 // extractToken, token'ı önce çerezden, yoksa Authorization header'ından çeker.
 func extractToken(r *http.Request) string {
-	// 1. Çerez kontrolü
 	cookie, err := r.Cookie(JWTCookieName)
 	if err == nil && cookie.Value != "" {
 		return cookie.Value
 	}
 
-	// 2. Authorization Header kontrolü (Bearer <token>)
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		return strings.TrimPrefix(authHeader, "Bearer ")

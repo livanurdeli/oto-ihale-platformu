@@ -1,8 +1,6 @@
 package auth
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -14,101 +12,74 @@ import (
 )
 
 // ============================================================================
-// 1. ŞİFRE GÜVENLİĞİ VE HASH'LEME FONKSİYONLARI (BCRYPT)
+// 1. ŞİFRE GÜVENLİĞİ VE HASH'LEME (BCRYPT)
 // ============================================================================
 
-// HashPassword fonksiyonu:
-// Kullanıcının kayıt olurken veya şifre değiştirirken girdiği açık metin şifreyi alır,
-// güvenlik kontrollerinden geçirir ve bcrypt algoritması kullanarak tek yönlü bir hash'e dönüştürür.
-//
-// NEDEN BCRYPT KULLANIYORUZ?
-// - MD5 veya SHA-256 gibi algoritmalar çok hızlıdır ve "Gökkuşağı Tabloları" (Rainbow Tables)
-//   ile kolayca kırılabilir.
-// - Bcrypt ise içerisinde otomatik olarak rastgele "tuz" (salt) üretir ve kasıtlı olarak
-//   yavaş çalıştırılarak (maliyet faktörü ile) brute-force (kaba kuvvet) saldırılarını engeller.
+var (
+	ErrPasswordTooShort = errors.New("şifre en az 6 karakter uzunluğunda olmalıdır")
+	ErrPasswordTooLong  = errors.New("şifre en fazla 72 karakter uzunluğunda olabilir")
+	ErrInvalidToken     = errors.New("geçersiz veya süresi dolmuş oturum belirteci (JWT)")
+
+	// DummyHash: Kullanıcı veritabanında bulunamadığında timing attack (zamanlama analizi)
+	// ile e-posta keşfini engellemek için karşılaştırılan sabit bcrypt özetidir.
+	// Böylece kullanıcı var da olsa yok da olsa bcrypt aynı süreyi harcar.
+	dummyHash = "$2a$10$7EqJtq98hPqEX7fNZaFWoOijK9t/Wp9nL2QO7pY7lQxI31FqB/eW."
+)
+
+// HashPassword açık şifreyi bcrypt ile hash'ler.
 func HashPassword(password string) (string, error) {
-	// Temel güvenlik kuralı: 6 karakterden kısa şifreleri kabul etmiyoruz
 	if len(password) < 6 {
-		return "", errors.New("şifre en az 6 karakter uzunluğunda olmalıdır")
+		return "", ErrPasswordTooShort
+	}
+	if len(password) > 72 {
+		return "", ErrPasswordTooLong
 	}
 
-	// bcrypt.DefaultCost (maliyet 10): Algoritmanın karmaşıklığını belirler.
-	// Donanımı yormadan ama hacker'ların deneme yapmasını imkansız kılacak ideal değerdir.
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
-
-	// Üretilen özet string olarak geri döndürülür (örn: $2a$10$wE9s9r4fI1...)
 	return string(bytes), nil
 }
 
-// CheckPasswordHash fonksiyonu:
-// Giriş (login) esnasında kullanıcının girdiği açık şifre ile veritabanında saklanan
-// bcrypt hash'ini karşılaştırır.
-//
-// NASIL ÇALIŞIR?
-// - bcrypt hash'i geri çözülemez (tek yönlüdür).
-// - Fonksiyon, hash'in içindeki "tuz" (salt) bilgisini okur, kullanıcının girdiği yeni şifreyi
-//   aynı tuz ile tekrar hash'ler ve iki hash'in eşleşip eşleşmediğini kontrol eder.
-// - Eşleşiyorsa true, hatalıysa false döner.
+// CheckPasswordHash şifre ile hash'i karşılaştırır.
 func CheckPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
 
-// ============================================================================
-// 2. OTURUM BELİRTECİ (SESSION TOKEN) ÜRETİCİSİ
-// ============================================================================
-
-// GenerateSessionToken fonksiyonu:
-// Kullanıcı başarılı giriş yaptığında, oturumunu takip etmek için tahmin edilmesi
-// matematiksel olarak imkansız olan 64 karakter uzunluğunda rastgele bir belirteç üretir.
-//
-// NEDEN crypto/rand?
-// - Standart math/rand rastgelelikte belirli bir formül izler ve tahmin edilebilir.
-// - crypto/rand ise işletim sisteminin kriptografik entropi havuzunu (donanım gürültüsü,
-//   işlemci hareketleri vb.) kullanarak gerçek anlamda rastgele baytlar üretir.
-func GenerateSessionToken() (string, error) {
-	// 32 bayt = 256 bitlik yüksek güvenlikli rastgele veri alanı
-	b := make([]byte, 32)
-	_, err := rand.Read(b)
-	if err != nil {
-		return "", err
-	}
-
-	// 32 baytlık ikili veriyi okunabilir 64 karakterlik Onaltılık (Hexadecimal) stringe çeviriyoruz.
-	return hex.EncodeToString(b), nil
+// DummyCheckPasswordHash kullanıcı bulunamadığında zaman farkını gizlemek için çalıştırılır.
+func DummyCheckPasswordHash(password string) {
+	_ = bcrypt.CompareHashAndPassword([]byte(dummyHash), []byte(password))
 }
 
-// ============================================================================
-// 3. E-POSTA NORMALİZASYONU
-// ============================================================================
-
-// NormalizeEmail fonksiyonu:
-// Kullanıcıların büyük/küçük harf veya başında/sonunda yanlışlıkla bıraktığı boşluklardan
-// kaynaklanan giriş sorunlarını önler.
-// Örneğin: "  Ahmet@Test.Com " -> "ahmet@test.com" haline getirilir.
+// NormalizeEmail e-postayı küçük harfe çevirir ve boşlukları kırpar.
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // ============================================================================
-// 4. JWT (JSON WEB TOKEN) OTURUM YÖNETİMİ
+// 2. JWT (JSON WEB TOKEN) OTURUM YÖNETİMİ & CLAIMS
 // ============================================================================
 
-var (
-	ErrInvalidToken = errors.New("geçersiz veya süresi dolmuş oturum belirteci (JWT)")
-)
+// Claims, JWT belirtecinin payload kısmında taşınan kimlik bilgileridir.
+type Claims struct {
+	UserID int64       `json:"user_id"`
+	Email  string      `json:"email"`
+	Role   models.Role `json:"role"`
+	jwt.RegisteredClaims
+}
 
-// GenerateJWT fonksiyonu:
-// Giriş yapmış kullanıcı için HMAC-SHA256 (HS256) algoritması ile imzalanmış
-// güvenli bir JSON Web Token üretir.
-// Token içinde: user_id, email, role, exp (son kullanma tarihi) bilgileri yer alır.
+// IsAdmin kullanıcının admin olup olmadığını belirtir.
+func (c *Claims) IsAdmin() bool {
+	return c != nil && c.Role == models.RoleAdmin
+}
+
+// GenerateJWT imzalı bir JWT token üretir.
 func GenerateJWT(user *models.User, secretKey string, duration time.Duration) (string, time.Time, error) {
 	expiresAt := time.Now().Add(duration)
 
-	claims := &models.JWTClaims{
+	claims := &Claims{
 		UserID: user.ID,
 		Email:  user.Email,
 		Role:   user.Role,
@@ -120,7 +91,6 @@ func GenerateJWT(user *models.User, secretKey string, duration time.Duration) (s
 		},
 	}
 
-	// HMAC-SHA256 ile imzala
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte(secretKey))
 	if err != nil {
@@ -130,12 +100,9 @@ func GenerateJWT(user *models.User, secretKey string, duration time.Duration) (s
 	return tokenString, expiresAt, nil
 }
 
-// ValidateJWT fonksiyonu:
-// İstemciden (Cookie veya Authorization Header) gelen token string'ini çözer,
-// gizli anahtar (secret key) ile imzasını doğrular ve içindeki kullanıcı bilgilerini (Claims) döner.
-func ValidateJWT(tokenString string, secretKey string) (*models.JWTClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &models.JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// Algoritmanın HMAC olduğundan emin oluyoruz (Algoritma sahteciliğine karşı güvenlik kontrolü)
+// ValidateJWT token string'ini çözer, imzayı doğrular ve Claims döner.
+func ValidateJWT(tokenString string, secretKey string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("beklenmeyen imza algoritması")
 		}
@@ -146,7 +113,7 @@ func ValidateJWT(tokenString string, secretKey string) (*models.JWTClaims, error
 		return nil, ErrInvalidToken
 	}
 
-	claims, ok := token.Claims.(*models.JWTClaims)
+	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
 		return nil, ErrInvalidToken
 	}

@@ -1,0 +1,70 @@
+{{define "content"}}
+<div style="padding: 1.5rem 0;">
+
+  {{with .Data}}
+  {{$listings := index . "Listings"}}
+  {{$damageLabel := index . "DamageLabel"}}
+
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.75rem; flex-wrap: wrap; gap: 1rem;">
+    <div>
+      <h1 style="font-size: 1.8rem; font-weight: 800; color: #0f172a;">📋 İlanlarım</h1>
+      <p style="color: #64748b; margin-top: 4px; font-size: 0.9rem;">
+        Yayınladığınız ve yönettiğiniz araç ilanları. Toplam: {{len $listings}} ilan.
+      </p>
+    </div>
+    <a href="/listings/new" class="btn btn-primary">+ Yeni İlan Ver</a>
+  </div>
+
+  {{if $listings}}
+    <div>
+      {{range $listings}}
+        <div class="my-listing-row">
+          <div class="my-listing-thumb">
+            {{if .CoverPhotoURL}}
+              <img src="{{.CoverPhotoURL}}" alt="{{.Brand}} {{.Model}}">
+            {{else}}
+              🚗
+            {{end}}
+          </div>
+          <div class="my-listing-info">
+            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+              <a href="/listings/{{.ID}}" class="my-listing-title" style="text-decoration: none;">
+                {{.Brand}} {{.Model}} ({{.Year}})
+              </a>
+              <span class="status-badge status-{{.Status}}">{{.Status}}</span>
+              <span class="damage-badge damage-{{.DamageStatus}}">
+                {{index $damageLabel .DamageStatus}}
+              </span>
+            </div>
+            <div class="my-listing-sub">
+              <span>🛣️ {{.Mileage}} km</span> •
+              <span>⛽ {{.FuelType}}</span> •
+              <span>🏙️ {{.City}}</span> •
+              <span>📅 {{formatDate .CreatedAt}}</span>
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <a href="/listings/{{.ID}}" class="btn btn-secondary btn-sm">Görüntüle</a>
+            <a href="/listings/{{.ID}}/edit" class="btn btn-secondary btn-sm">Düzenle</a>
+            <form method="POST" action="/listings/{{.ID}}/delete" onsubmit="return confirm('Bu ilanı silmek istediğinizden emin misiniz?')" style="margin: 0;">
+              <button type="submit" class="btn btn-danger btn-sm">Sil</button>
+            </form>
+          </div>
+        </div>
+      {{end}}
+    </div>
+  {{else}}
+    <div style="text-align: center; padding: 4rem 2rem; background: white; border-radius: var(--radius-md); border: 1px solid #e2e8f0;">
+      <div style="font-size: 3.5rem; margin-bottom: 1rem;">🚗</div>
+      <h2 style="font-size: 1.3rem; font-weight: 700; color: #0f172a; margin-bottom: 0.5rem;">Henüz bir ilanınız bulunmuyor</h2>
+      <p style="color: #64748b; font-size: 0.95rem; margin-bottom: 1.5rem;">
+        Aracınızı satmak veya açık artırmaya sunmak için hemen ilk ilanınızı oluşturun.
+      </p>
+      <a href="/listings/new" class="btn btn-primary">+ İlk İlanını Oluştur</a>
+    </div>
+  {{end}}
+
+  {{end}}
+</div>
+{{end}}
+

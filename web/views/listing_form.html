@@ -1,0 +1,189 @@
+{{define "content"}}
+<div style="padding: 1.5rem 0;">
+
+  {{with .Data}}
+  {{$isEdit := index . "IsEdit"}}
+  {{$listing := index . "Listing"}}
+  {{$form := index . "Form"}}
+  {{$currentYear := index . "CurrentYear"}}
+  {{$damageStatuses := index . "DamageStatuses"}}
+  {{$damageLabel := index . "DamageLabel"}}
+
+  <div class="form-card">
+    <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
+      <h1 style="font-size: 1.6rem; font-weight: 800; color: #0f172a;">
+        {{if $isEdit}}✏️ İlanı Düzenle{{else}}🚗 Yeni İlan Oluştur{{end}}
+      </h1>
+      <a href="{{if $isEdit}}/listings/{{$listing.ID}}{{else}}/listings{{end}}" class="btn btn-secondary btn-sm">Vazgeç</a>
+    </div>
+
+    <form method="POST" action="{{if $isEdit}}/listings/{{$listing.ID}}/edit{{else}}/listings{{end}}" enctype="multipart/form-data" id="listing-form">
+
+      <!-- TEMEL ARAÇ BİLGİLERİ -->
+      <div class="form-section-title">Temel Araç Bilgileri</div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="brand">Marka *</label>
+          <input type="text" id="brand" name="brand" required placeholder="ör. Toyota"
+                 value="{{if $form}}{{$form.Brand}}{{else if $isEdit}}{{$listing.Brand}}{{end}}">
+        </div>
+        <div class="form-group">
+          <label for="model">Model *</label>
+          <input type="text" id="model" name="model" required placeholder="ör. Corolla"
+                 value="{{if $form}}{{$form.Model}}{{else if $isEdit}}{{$listing.Model}}{{end}}">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="year">Model Yılı *</label>
+          <input type="number" id="year" name="year" required min="1950" max="{{$currentYear}}" placeholder="{{$currentYear}}"
+                 value="{{if $form}}{{if $form.Year}}{{$form.Year}}{{end}}{{else if $isEdit}}{{$listing.Year}}{{end}}">
+        </div>
+        <div class="form-group">
+          <label for="mileage">Kilometre (Km) *</label>
+          <input type="number" id="mileage" name="mileage" required min="0" placeholder="ör. 85000"
+                 value="{{if $form}}{{if $form.Mileage}}{{$form.Mileage}}{{end}}{{else if $isEdit}}{{$listing.Mileage}}{{end}}">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="fuel_type">Yakıt Tipi *</label>
+          {{$selectedFuel := ""}}
+          {{if $form}}{{$selectedFuel = $form.FuelType}}{{else if $isEdit}}{{$selectedFuel = $listing.FuelType}}{{end}}
+          <select id="fuel_type" name="fuel_type" required>
+            <option value="">Seçiniz</option>
+            <option value="benzin"   {{if eq $selectedFuel "benzin"}}selected{{end}}>Benzin</option>
+            <option value="dizel"    {{if eq $selectedFuel "dizel"}}selected{{end}}>Dizel</option>
+            <option value="lpg"      {{if eq $selectedFuel "lpg"}}selected{{end}}>LPG</option>
+            <option value="elektrik" {{if eq $selectedFuel "elektrik"}}selected{{end}}>Elektrik</option>
+            <option value="hibrit"   {{if eq $selectedFuel "hibrit"}}selected{{end}}>Hibrit</option>
+            <option value="hidrojen" {{if eq $selectedFuel "hidrojen"}}selected{{end}}>Hidrojen</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="transmission">Vites Tipi *</label>
+          {{$selectedTrans := ""}}
+          {{if $form}}{{$selectedTrans = $form.Transmission}}{{else if $isEdit}}{{$selectedTrans = $listing.Transmission}}{{end}}
+          <select id="transmission" name="transmission" required>
+            <option value="">Seçiniz</option>
+            <option value="manuel"     {{if eq $selectedTrans "manuel"}}selected{{end}}>Manuel</option>
+            <option value="otomatik"   {{if eq $selectedTrans "otomatik"}}selected{{end}}>Otomatik</option>
+            <option value="yari_otomatik" {{if eq $selectedTrans "yari_otomatik"}}selected{{end}}>Yarı Otomatik</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="city">Şehir *</label>
+          <input type="text" id="city" name="city" required placeholder="ör. İstanbul"
+                 value="{{if $form}}{{$form.City}}{{else if $isEdit}}{{$listing.City}}{{end}}">
+        </div>
+        <div class="form-group">
+          <label for="engine_volume">Motor Hacmi (cc) <small style="color:#64748b;">(isteğe bağlı)</small></label>
+          <input type="number" id="engine_volume" name="engine_volume" min="50" max="12000" placeholder="ör. 1598"
+                 value="{{if $form}}{{if $form.EngineVolume}}{{$form.EngineVolume}}{{end}}{{else if $isEdit}}{{if $listing.EngineVolume}}{{$listing.EngineVolume}}{{end}}{{end}}">
+        </div>
+      </div>
+
+      <!-- HASAR VE DURUM -->
+      <div class="form-section-title" style="margin-top: 1.5rem;">Ekspertiz ve Durum</div>
+
+      <div class="form-group">
+        <label for="damage_status">Hasar Durumu *</label>
+        {{$selectedDamage := "bilinmiyor"}}
+        {{if $form}}{{$selectedDamage = $form.DamageStatus}}{{else if $isEdit}}{{$selectedDamage = $listing.DamageStatus}}{{end}}
+        <select id="damage_status" name="damage_status" required>
+          {{range $damageStatuses}}
+            <option value="{{.}}" {{if eq . $selectedDamage}}selected{{end}}>
+              {{index $damageLabel .}}
+            </option>
+          {{end}}
+        </select>
+        <small style="color: #64748b; margin-top: 2px;">
+          * Varsayılan değer "Bilinmiyor"dur. Boş bırakılamaz ve bilinmiyor seçimi hasarsız anlamına gelmez.
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label for="description">İlan Açıklaması</label>
+        <textarea id="description" name="description" rows="5" placeholder="Araç hakkında detaylı bilgi, donanım özellikleri, tramer ve bakım geçmişi...">{{if $form}}{{$form.Description}}{{else if $isEdit}}{{$listing.Description}}{{end}}</textarea>
+      </div>
+
+      <!-- FOTOĞRAFLAR -->
+      <div class="form-section-title" style="margin-top: 1.5rem;">Fotoğraflar (En fazla 10 adet, her biri max 5 MB)</div>
+
+      {{if and $isEdit $listing.Photos}}
+        <div style="margin-bottom: 1rem;">
+          <div style="font-weight: 600; font-size: 0.88rem; color: #374151; margin-bottom: 0.5rem;">Mevcut Fotoğraflar:</div>
+          <div class="photo-gallery">
+            {{range $listing.Photos}}
+              <div style="position: relative;">
+                <img src="{{.PhotoURL}}" alt="Mevcut Fotoğraf">
+                <span style="position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,0.6); color: white; padding: 2px 6px; font-size: 0.72rem; border-radius: 4px;">
+                  Sıra: {{.DisplayOrder}}
+                </span>
+              </div>
+            {{end}}
+          </div>
+        </div>
+      {{end}}
+
+      <div class="form-group">
+        <div class="upload-zone" onclick="document.getElementById('photos-input').click()">
+          <div style="font-size: 2.2rem; margin-bottom: 0.5rem;">📸</div>
+          <div style="font-weight: 600; color: #1e293b;">Fotoğraf eklemek için tıklayın veya dosyaları buraya sürükleyin</div>
+          <div style="font-size: 0.82rem; color: #64748b; margin-top: 4px;">JPEG, PNG veya WebP dosyaları kabul edilir (Toplam en çok 10 fotoğraf).</div>
+          <input type="file" id="photos-input" name="photos" multiple accept="image/jpeg,image/png,image/webp" onchange="previewFiles(this)">
+        </div>
+        <div id="file-list" style="margin-top: 0.75rem; font-size: 0.88rem; color: #374151;"></div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 2rem; border-top: 1px solid #f1f5f9; padding-top: 1.25rem;">
+        <a href="{{if $isEdit}}/listings/{{$listing.ID}}{{else}}/listings{{end}}" class="btn btn-secondary">İptal</a>
+        <button type="submit" class="btn btn-primary" id="btn-submit-listing">
+          {{if $isEdit}}Değişiklikleri Kaydet{{else}}İlanı Yayınla{{end}}
+        </button>
+      </div>
+
+    </form>
+  </div>
+
+  <script>
+    function previewFiles(input) {
+      var fileList = document.getElementById('file-list');
+      fileList.innerHTML = '';
+      if (!input.files || input.files.length === 0) return;
+
+      if (input.files.length > 10) {
+        alert('En fazla 10 adet fotoğraf yükleyebilirsiniz.');
+        input.value = '';
+        return;
+      }
+
+      var ul = document.createElement('ul');
+      ul.style.listStyle = 'none';
+      ul.style.padding = '0';
+
+      for (var i = 0; i < input.files.length; i++) {
+        var file = input.files[i];
+        var li = document.createElement('li');
+        li.style.padding = '4px 0';
+        li.style.display = 'flex';
+        li.style.alignItems = 'center';
+        li.style.gap = '8px';
+        var sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+        li.innerHTML = '🖼️ <strong>' + file.name + '</strong> (' + sizeMB + ' MB)' + (i === 0 ? ' <span style="background:#dcfce7; color:#166534; font-size:0.75rem; padding:1px 6px; border-radius:4px;">Kapak</span>' : '');
+        ul.appendChild(li);
+      }
+      fileList.appendChild(ul);
+    }
+  </script>
+
+  {{end}}
+</div>
+{{end}}
+

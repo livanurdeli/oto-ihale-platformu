@@ -1,0 +1,162 @@
+{{define "content"}}
+<div style="padding: 1.5rem 0;">
+
+  {{with .Data}}
+  {{$listing := index . "Listing"}}
+  {{$damageLabel := index . "DamageLabel"}}
+  {{$canModify := index . "CanModify"}}
+
+  <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+    <a href="/listings" class="btn btn-secondary btn-sm">‹ İlan Listesine Dön</a>
+    
+    {{if $canModify}}
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <a href="/listings/{{$listing.ID}}/edit" class="btn btn-secondary btn-sm">✏️ İlanı Düzenle</a>
+        <form method="POST" action="/listings/{{$listing.ID}}/delete" onsubmit="return confirm('Bu ilanı kalıcı olarak silmek istediğinizden emin misiniz?')" style="margin: 0;">
+          <button type="submit" class="btn btn-danger btn-sm">🗑️ İlanı Sil</button>
+        </form>
+      </div>
+    {{end}}
+  </div>
+
+  <div class="detail-layout">
+    <!-- SOL KOLON: FOTOĞRAFLAR VE AÇIKLAMA -->
+    <div>
+      <div class="card" style="padding: 1.5rem; margin-bottom: 1.5rem;">
+        <h1 style="font-size: 1.8rem; font-weight: 800; color: #0f172a; margin-bottom: 0.5rem;">
+          {{$listing.Brand}} {{$listing.Model}}
+        </h1>
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.25rem;">
+          <span style="color: #64748b; font-size: 0.95rem;">İlan No: #{{$listing.ID}}</span>
+          <span style="color: #cbd5e1;">•</span>
+          <span style="color: #64748b; font-size: 0.95rem;">İlan Tarihi: {{formatDate $listing.CreatedAt}}</span>
+        </div>
+
+        <!-- FOTOĞRAF GALERİSİ -->
+        {{if $listing.Photos}}
+          {{$firstPhoto := index $listing.Photos 0}}
+          <div style="margin-bottom: 1rem;">
+            <img id="main-display-photo" class="detail-main-image" src="{{$firstPhoto.PhotoURL}}" alt="{{$listing.Brand}} {{$listing.Model}}" onclick="openLightbox(this.src)" style="cursor: zoom-in;">
+          </div>
+          {{if gt (len $listing.Photos) 1}}
+            <div class="photo-gallery">
+              {{range $listing.Photos}}
+                <img src="{{.PhotoURL}}" alt="Fotoğraf {{.DisplayOrder}}" onclick="changeMainPhoto('{{.PhotoURL}}')">
+              {{end}}
+            </div>
+          {{end}}
+        {{else}}
+          <div class="detail-no-image">
+            🚗
+          </div>
+        {{end}}
+      </div>
+
+      <!-- AÇIKLAMA KARTI -->
+      <div class="card" style="padding: 1.5rem;">
+        <h2 style="font-size: 1.15rem; font-weight: 700; color: #0f172a; margin-bottom: 1rem; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem;">
+          İlan Açıklaması
+        </h2>
+        {{if $listing.Description}}
+          <div style="white-space: pre-wrap; line-height: 1.7; color: #334151; font-size: 0.98rem;">{{$listing.Description}}</div>
+        {{else}}
+          <p style="color: #94a3b8; font-style: italic;">Satıcı tarafından herhangi bir açıklama girilmemiştir.</p>
+        {{end}}
+      </div>
+    </div>
+
+    <!-- SAĞ KOLON: ÖZELLİKLER VE BİLGİ KARTI -->
+    <div>
+      <div class="card" style="padding: 1.5rem; position: sticky; top: 1.5rem;">
+        <div style="margin-bottom: 1.25rem;">
+          <span class="filter-label">Hasar Durumu</span>
+          <div style="margin-top: 0.35rem;">
+            <span class="damage-badge damage-{{$listing.DamageStatus}}" style="font-size: 0.95rem; padding: 6px 14px; border-radius: 8px;">
+              {{index $damageLabel $listing.DamageStatus}}
+            </span>
+          </div>
+        </div>
+
+        <h3 style="font-size: 0.85rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 0.75rem;">
+          Teknik Detaylar
+        </h3>
+
+        <div class="spec-grid" style="grid-template-columns: 1fr;">
+          <div class="spec-item">
+            <div class="spec-label">Marka</div>
+            <div class="spec-value">{{$listing.Brand}}</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-label">Model</div>
+            <div class="spec-value">{{$listing.Model}}</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-label">Model Yılı</div>
+            <div class="spec-value">{{$listing.Year}}</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-label">Kilometre</div>
+            <div class="spec-value">{{$listing.Mileage}} km</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-label">Yakıt Tipi</div>
+            <div class="spec-value" style="text-transform: capitalize;">{{$listing.FuelType}}</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-label">Vites Tipi</div>
+            <div class="spec-value" style="text-transform: capitalize;">{{$listing.Transmission}}</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-label">Şehir</div>
+            <div class="spec-value">{{$listing.City}}</div>
+          </div>
+          {{if $listing.EngineVolume}}
+          <div class="spec-item">
+            <div class="spec-label">Motor Hacmi</div>
+            <div class="spec-value">{{$listing.EngineVolume}} cc</div>
+          </div>
+          {{end}}
+          <div class="spec-item">
+            <div class="spec-label">İlan Durumu</div>
+            <div class="spec-value">
+              <span class="status-badge status-{{$listing.Status}}">{{$listing.Status}}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIGHTBOX -->
+  <div id="lightbox" class="lightbox-overlay" onclick="closeLightbox()">
+    <button class="lightbox-close" onclick="closeLightbox()">&times;</button>
+    <img id="lightbox-img" src="" alt="Büyük fotoğraf" onclick="event.stopPropagation()">
+  </div>
+
+  <script>
+    function changeMainPhoto(url) {
+      var mainImg = document.getElementById('main-display-photo');
+      if (mainImg) {
+        mainImg.src = url;
+      }
+    }
+    function openLightbox(url) {
+      var lb = document.getElementById('lightbox');
+      var lbImg = document.getElementById('lightbox-img');
+      if (lb && lbImg) {
+        lbImg.src = url;
+        lb.classList.add('active');
+      }
+    }
+    function closeLightbox() {
+      var lb = document.getElementById('lightbox');
+      if (lb) {
+        lb.classList.remove('active');
+      }
+    }
+  </script>
+
+  {{end}}
+</div>
+{{end}}
+

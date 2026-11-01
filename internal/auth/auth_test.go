@@ -28,25 +28,19 @@ func TestHashAndCheckPassword(t *testing.T) {
 	}
 }
 
-func TestPasswordTooShort(t *testing.T) {
+func TestPasswordLengthLimits(t *testing.T) {
 	_, err := HashPassword("12345")
-	if err == nil {
-		t.Error("Kısa şifre için hata dönmeliydi")
-	}
-}
-
-func TestGenerateSessionToken(t *testing.T) {
-	token1, err := GenerateSessionToken()
-	if err != nil {
-		t.Fatalf("Token üretilemedi: %v", err)
-	}
-	if len(token1) != 64 {
-		t.Errorf("Beklenen token uzunluğu 64 hex karakter, alınan: %d", len(token1))
+	if err != ErrPasswordTooShort {
+		t.Errorf("Kısa şifre için ErrPasswordTooShort bekleniyordu, alınan: %v", err)
 	}
 
-	token2, _ := GenerateSessionToken()
-	if token1 == token2 {
-		t.Error("İki oturum tokenı birbirinden farklı olmalıdır")
+	longPassword := make([]byte, 73)
+	for i := range longPassword {
+		longPassword[i] = 'a'
+	}
+	_, err = HashPassword(string(longPassword))
+	if err != ErrPasswordTooLong {
+		t.Errorf("Uzun şifre için ErrPasswordTooLong bekleniyordu, alınan: %v", err)
 	}
 }
 
@@ -59,11 +53,11 @@ func TestNormalizeEmail(t *testing.T) {
 }
 
 func TestJWTGenerateAndValidate(t *testing.T) {
-	secretKey := "test-secret-key-123"
+	secretKey := "test-secret-key-12345678901234567890"
 	user := &models.User{
 		ID:    42,
 		Email: "jwt.user@otoihale.com",
-		Role:  "admin",
+		Role:  models.RoleAdmin,
 	}
 
 	tokenStr, expiresAt, err := GenerateJWT(user, secretKey, 1*time.Hour)
@@ -85,7 +79,7 @@ func TestJWTGenerateAndValidate(t *testing.T) {
 		t.Fatalf("JWT doğrulanamadı: %v", err)
 	}
 
-	if claims.UserID != user.ID || claims.Email != user.Email || claims.Role != "admin" {
+	if claims.UserID != user.ID || claims.Email != user.Email || claims.Role != models.RoleAdmin {
 		t.Errorf("JWT claims uyuşmuyor: %+v", claims)
 	}
 
@@ -94,7 +88,7 @@ func TestJWTGenerateAndValidate(t *testing.T) {
 	}
 
 	// Yanlış anahtarla doğrulama denemesi (Başarısız olmalı)
-	_, err = ValidateJWT(tokenStr, "yanlis-gizli-anahtar")
+	_, err = ValidateJWT(tokenStr, "yanlis-gizli-anahtar-1234567890123456")
 	if err == nil {
 		t.Error("Yanlış gizli anahtarla JWT doğrulanamamalıydı")
 	}

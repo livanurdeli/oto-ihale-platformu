@@ -34,3 +34,7 @@ Thumbs.db
 
 # Docker volume data if bound locally
 data/postgres/
+
+# User Uploads
+uploads/*
+!uploads/.gitkeep

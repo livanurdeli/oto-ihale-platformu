@@ -45,8 +45,11 @@ func TestMigrationFileSyntax(t *testing.T) {
 				t.Fatalf("%s okunamadi: %v", f.Name(), err)
 			}
 			sqlText := string(content)
-			if !strings.Contains(sqlText, "CREATE TABLE") {
-				t.Errorf("%s icerisinde CREATE TABLE ifadesi bekleniyordu", f.Name())
+			hasDDL := strings.Contains(sqlText, "CREATE TABLE") ||
+				strings.Contains(sqlText, "ALTER TABLE") ||
+				strings.Contains(sqlText, "CREATE INDEX")
+			if !hasDDL {
+				t.Errorf("%s icerisinde gecerli DDL (CREATE TABLE / ALTER TABLE / CREATE INDEX) ifadesi bekleniyordu", f.Name())
 			}
 			if strings.HasPrefix(f.Name(), "001_") {
 				// Kontrol: users, listings, listing_photos, auctions, bids

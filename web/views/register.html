@@ -5,7 +5,7 @@
       <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🚀</div>
       <h2 style="font-size: 1.6rem; font-weight: 700; color: #0f172a;">Yeni Hesap Oluştur</h2>
       <p style="color: #64748b; font-size: 0.9rem; margin-top: 0.25rem;">
-        Araç alım-satım ve yapay zekâ değerleme platformuna katılın
+        Araç alım-satım ve açık artırma platformuna katılın
       </p>
     </div>
 
@@ -21,9 +21,9 @@
 
       <div>
         <label for="password" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
-          Şifre (En az 6 karakter)
+          Şifre (6 - 72 karakter)
         </label>
-        <input type="password" id="password" name="password" required minlength="6" placeholder="••••••••"
+        <input type="password" id="password" name="password" required minlength="6" maxlength="72" placeholder="••••••••"
           style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none;"
           onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
       </div>
@@ -32,23 +32,9 @@
         <label for="password_confirm" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
           Şifre Tekrarı
         </label>
-        <input type="password" id="password_confirm" name="password_confirm" required minlength="6" placeholder="••••••••"
+        <input type="password" id="password_confirm" name="password_confirm" required minlength="6" maxlength="72" placeholder="••••••••"
           style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none;"
           onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
-      </div>
-
-      <div>
-        <label for="role" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
-          Hesap Rolü (Test Kolaylığı İçin)
-        </label>
-        <select id="role" name="role"
-          style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; background: white;">
-          <option value="user" selected>👤 Standart Kullanıcı (user)</option>
-          <option value="admin">👑 Yönetici (admin)</option>
-        </select>
-        <small style="color: #64748b; font-size: 0.78rem; display: block; margin-top: 4px;">
-          * Test amaçlı yönetici rolünü doğrudan seçebilirsiniz.
-        </small>
       </div>
 
       <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-size: 1rem; margin-top: 0.5rem;">
