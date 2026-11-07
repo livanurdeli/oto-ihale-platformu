@@ -5,31 +5,24 @@
     <div>
       <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
         <h1 style="font-size: 1.8rem; font-weight: 800; color: #0f172a;">Kullanıcı Paneli</h1>
-        {{if .IsAdmin}}
-          <span class="role-tag role-admin" style="font-size: 0.8rem; padding: 3px 10px;">👑 Yönetici</span>
-        {{else}}
-          <span class="role-tag role-user" style="font-size: 0.8rem; padding: 3px 10px;">👤 Standart Üye</span>
-        {{end}}
       </div>
       <p style="color: #64748b; font-size: 0.95rem;">
-        Hoş geldiniz, <strong>{{.User.Email}}</strong>. Oturumunuz güvenli çerez ile aktiftir.
+        Hoş geldiniz, <strong>{{.User.Email}}</strong>.
       </p>
     </div>
 
     <div style="display: flex; gap: 0.75rem;">
-      {{if .IsAdmin}}
-        <a href="/admin" class="btn" style="background: #7c3aed; color: white;">👑 Admin Paneline Git</a>
-      {{end}}
+      <a href="/listings/new" class="btn btn-primary">+ Yeni İlan Ver</a>
       <form action="/logout" method="POST" style="margin: 0;">
-        <button type="submit" class="btn btn-danger">Güvenli Çıkış</button>
+        <button type="submit" class="btn btn-danger">Çıkış Yap</button>
       </form>
     </div>
   </div>
 
-  <!-- KULLANICI DETAY KARTLARI -->
+  <!-- KULLANICI HESAP DETAYLARI -->
   <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
     <div style="background: white; border-radius: var(--radius-md); padding: 1.5rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0;">
-      <div style="font-size: 0.82rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Kullanıcı Kimliği (ID)</div>
+      <div style="font-size: 0.82rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Üye Numarası</div>
       <div style="font-size: 1.8rem; font-weight: 800; color: #0f172a; margin-top: 0.35rem;">#{{.User.ID}}</div>
     </div>
 
@@ -48,23 +41,30 @@
     </div>
   </div>
 
-  <!-- HAFTA 2 GÜVENLİK TEST KARTI -->
-  <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow);">
-    <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 0.75rem;">
-      🛡️ Güvenlik & Yetkilendirme Durumu
+  <!-- HIZLI İŞLEMLER -->
+  <div style="background: white; border: 1px solid #e2e8f0; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow);">
+    <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 1.25rem;">
+      ⚡ Hızlı İşlemler
     </h3>
-    <ul style="list-style: none; display: flex; flex-direction: column; gap: 0.6rem; color: #475569; font-size: 0.93rem;">
-      <li>✅ <strong>Bcrypt Şifreleme:</strong> Şifreniz açık metin olarak saklanmaz, hash olarak doğrulanır.</li>
-      <li>✅ <strong>Oturum Çerezi (HttpOnly):</strong> Oturumunuz <code>session_token</code> isimli güvenli çerezle taşınır.</li>
-      <li>
-        ✅ <strong>Yetkisiz Sayfa Koruması:</strong>
-        {{if .IsAdmin}}
-          Yönetici rolüne sahip olduğunuz için <a href="/admin" style="color: #7c3aed; font-weight: 600;">/admin</a> sayfasına tam erişim hakkınız vardır.
-        {{else}}
-          Standart kullanıcı rolünde olduğunuz için <a href="/admin" style="color: #2563eb; font-weight: 600;">/admin</a> sayfasına girmeyi denerseniz sistem sizi otomatik olarak <strong>403 Yetkisiz Erişim</strong> ile durdurur.
-        {{end}}
-      </li>
-    </ul>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
+      <a href="/listings/new" style="display: block; padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: var(--radius-sm); text-decoration: none; transition: all 0.2s; background: #fafafa;" onmouseover="this.style.borderColor='var(--primary)'; this.style.background='#f0f9ff';" onmouseout="this.style.borderColor='#e2e8f0'; this.style.background='#fafafa';">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">➕</div>
+        <div style="font-weight: 700; color: #0f172a; font-size: 1rem;">Yeni İlan Oluştur</div>
+        <div style="color: #64748b; font-size: 0.85rem; margin-top: 0.25rem;">Aracınızı fotoğraflarıyla sisteme yükleyin ve satışa sunun.</div>
+      </a>
+
+      <a href="/my/listings" style="display: block; padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: var(--radius-sm); text-decoration: none; transition: all 0.2s; background: #fafafa;" onmouseover="this.style.borderColor='var(--primary)'; this.style.background='#f0f9ff';" onmouseout="this.style.borderColor='#e2e8f0'; this.style.background='#fafafa';">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">📋</div>
+        <div style="font-weight: 700; color: #0f172a; font-size: 1rem;">İlanlarımı Yönet</div>
+        <div style="color: #64748b; font-size: 0.85rem; margin-top: 0.25rem;">Yayınladığınız araçları düzenleyin, fotoğraflarını güncelleyin veya silin.</div>
+      </a>
+
+      <a href="/listings" style="display: block; padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: var(--radius-sm); text-decoration: none; transition: all 0.2s; background: #fafafa;" onmouseover="this.style.borderColor='var(--primary)'; this.style.background='#f0f9ff';" onmouseout="this.style.borderColor='#e2e8f0'; this.style.background='#fafafa';">
+        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">🔍</div>
+        <div style="font-weight: 700; color: #0f172a; font-size: 1rem;">Araç Pazarına Göz At</div>
+        <div style="color: #64748b; font-size: 0.85rem; margin-top: 0.25rem;">Piyasadaki aktif araçları inceleyin, marka ve modele göre filtreleyin.</div>
+      </a>
+    </div>
   </div>
 </div>
 {{end}}

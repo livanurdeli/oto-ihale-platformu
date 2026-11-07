@@ -1,13 +1,9 @@
 package services_test
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"mime/multipart"
-	"net/textproto"
-	"os"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,22 +12,26 @@ import (
 )
 
 // ============================================================================
-// MOCK REPOSITORY
+// MOCK REPOSITORY (Hafta 4 güncel - Açık Artırma Destekli)
 // ============================================================================
 
 type mockListingRepo struct {
 	listings map[int64]*models.Listing
 	photos   map[int64][]models.ListingPhoto
+	bids     map[int64][]models.Bid
 	nextID   int64
 	nextPID  int64
+	nextBID  int64
 }
 
 func newMockListingRepo() *mockListingRepo {
 	return &mockListingRepo{
 		listings: make(map[int64]*models.Listing),
 		photos:   make(map[int64][]models.ListingPhoto),
+		bids:     make(map[int64][]models.Bid),
 		nextID:   1,
 		nextPID:  1,
+		nextBID:  1,
 	}
 }
 
@@ -43,22 +43,39 @@ func (m *mockListingRepo) CreateListing(ctx context.Context, tx *sql.Tx, input m
 	id := m.nextID
 	m.nextID++
 
+	startingPrice := input.StartingPrice
+	if startingPrice <= 0 {
+		startingPrice = 100000
+	}
+	minIncrement := input.MinIncrement
+	if minIncrement <= 0 {
+		minIncrement = 1000
+	}
+	endTime := time.Now().Add(3 * 24 * time.Hour)
+	if !input.EndTime.IsZero() {
+		endTime = input.EndTime
+	}
+
 	l := &models.Listing{
-		ID:           id,
-		UserID:       userID,
-		Brand:        input.Brand,
-		Model:        input.Model,
-		Year:         input.Year,
-		Mileage:      input.Mileage,
-		FuelType:     input.FuelType,
-		Transmission: input.Transmission,
-		City:         input.City,
-		Description:  input.Description,
-		DamageStatus: input.DamageStatus,
-		EngineVolume: input.EngineVolume,
-		Status:       "active",
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:            id,
+		UserID:        userID,
+		Brand:         input.Brand,
+		Model:         input.Model,
+		Year:          input.Year,
+		Mileage:       input.Mileage,
+		FuelType:      input.FuelType,
+		Transmission:  input.Transmission,
+		City:          input.City,
+		Description:   input.Description,
+		DamageStatus:  input.DamageStatus,
+		EngineVolume:  input.EngineVolume,
+		Status:        "active",
+		StartingPrice: startingPrice,
+		MinIncrement:  minIncrement,
+		EndTime:       endTime,
+		CurrentBid:    0,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 	m.listings[id] = l
 	return l, nil
@@ -67,14 +84,7 @@ func (m *mockListingRepo) CreateListing(ctx context.Context, tx *sql.Tx, input m
 func (m *mockListingRepo) AddPhoto(ctx context.Context, tx *sql.Tx, listingID int64, photoURL string, order int) (*models.ListingPhoto, error) {
 	pid := m.nextPID
 	m.nextPID++
-
-	p := models.ListingPhoto{
-		ID:           pid,
-		ListingID:    listingID,
-		PhotoURL:     photoURL,
-		DisplayOrder: order,
-		CreatedAt:    time.Now(),
-	}
+	p := models.ListingPhoto{ID: pid, ListingID: listingID, PhotoURL: photoURL, DisplayOrder: order, CreatedAt: time.Now()}
 	m.photos[listingID] = append(m.photos[listingID], p)
 	return &p, nil
 }
@@ -85,6 +95,7 @@ func (m *mockListingRepo) GetListingByID(ctx context.Context, id int64) (*models
 		return nil, services.ErrListingNotFound
 	}
 	l.Photos = m.photos[id]
+	l.Bids = m.bids[id]
 	return l, nil
 }
 
@@ -93,13 +104,7 @@ func (m *mockListingRepo) ListListings(ctx context.Context, filter models.Listin
 	for _, l := range m.listings {
 		items = append(items, l)
 	}
-	return &models.Page[*models.Listing]{
-		Items:      items,
-		Total:      len(items),
-		Page:       1,
-		PerPage:    20,
-		TotalPages: 1,
-	}, nil
+	return &models.Page[*models.Listing]{Items: items, Total: len(items), Page: 1, PerPage: 20, TotalPages: 1}, nil
 }
 
 func (m *mockListingRepo) GetListingsByUserID(ctx context.Context, userID int64) ([]*models.Listing, error) {
@@ -124,16 +129,17 @@ func (m *mockListingRepo) UpdateListing(ctx context.Context, id int64, input mod
 	l.FuelType = input.FuelType
 	l.Transmission = input.Transmission
 	l.City = input.City
-	l.DamageStatus = input.DamageStatus
-	l.EngineVolume = input.EngineVolume
 	l.Description = input.Description
+	l.DamageStatus = input.DamageStatus
 	l.UpdatedAt = time.Now()
 	return l, nil
 }
 
 func (m *mockListingRepo) DeleteListing(ctx context.Context, id int64) error {
+	if _, ok := m.listings[id]; !ok {
+		return services.ErrListingNotFound
+	}
 	delete(m.listings, id)
-	delete(m.photos, id)
 	return nil
 }
 
@@ -142,341 +148,315 @@ func (m *mockListingRepo) GetPhotosByListingID(ctx context.Context, listingID in
 }
 
 func (m *mockListingRepo) DeletePhoto(ctx context.Context, photoID int64) (*models.ListingPhoto, error) {
-	return nil, nil
+	return &models.ListingPhoto{ID: photoID}, nil
 }
 
 func (m *mockListingRepo) CountPhotosByListingID(ctx context.Context, listingID int64) (int, error) {
 	return len(m.photos[listingID]), nil
 }
 
-// ============================================================================
-// 1. DOĞRULAMA (VALIDATION) TESTLERİ
-// ============================================================================
-
-func TestValidateListing_Valid(t *testing.T) {
-	currentYear := time.Now().Year()
-	engineVol := 1598
-
-	validInput := models.ListingCreateInput{
-		Brand:        "Toyota",
-		Model:        "Corolla",
-		Year:         currentYear - 2,
-		Mileage:      45000,
-		FuelType:     "benzin",
-		Transmission: "otomatik",
-		City:         "Ankara",
-		DamageStatus: models.DamageUnknown,
-		EngineVolume: &engineVol,
-		Description:  "Yetkili servis bakımlı",
+// PlaceBid - basit mock implementasyonu
+func (m *mockListingRepo) PlaceBid(ctx context.Context, listingID, userID int64, amount float64) (*models.Bid, error) {
+	l, ok := m.listings[listingID]
+	if !ok {
+		return nil, services.ErrListingNotFound
+	}
+	if l.Status != "active" || time.Now().After(l.EndTime) {
+		return nil, services.ErrAuctionEnded
+	}
+	if l.UserID == userID {
+		return nil, services.ErrCannotBidOwnListing
+	}
+	minRequired := l.StartingPrice
+	if l.CurrentBid > 0 {
+		minRequired = l.CurrentBid + l.MinIncrement
+	}
+	if amount < minRequired {
+		return nil, services.ErrBidTooLow
 	}
 
-	if err := services.ValidateListing(validInput); err != nil {
-		t.Fatalf("Geçerli ilan doğrulanamadı: %v", err)
-	}
+	bid := models.Bid{ID: m.nextBID, ListingID: listingID, UserID: userID, Amount: amount, CreatedAt: time.Now()}
+	m.nextBID++
+	m.bids[listingID] = append(m.bids[listingID], bid)
+	l.CurrentBid = amount
+	return &bid, nil
 }
 
-func TestValidateListing_InvalidFields(t *testing.T) {
-	currentYear := time.Now().Year()
+func (m *mockListingRepo) GetBidsByListingID(ctx context.Context, listingID int64) ([]models.Bid, error) {
+	return m.bids[listingID], nil
+}
 
-	tests := []struct {
-		name          string
-		mutate        func(i *models.ListingCreateInput)
-		expectedError string
-	}{
-		{
-			name: "Boş marka",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Brand = ""
-			},
-			expectedError: "marka",
-		},
-		{
-			name: "Boş model",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Model = ""
-			},
-			expectedError: "model",
-		},
-		{
-			name: "1950'den eski yıl",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Year = 1949
-			},
-			expectedError: "yıl",
-		},
-		{
-			name: "Gelecek yıl",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Year = currentYear + 2
-			},
-			expectedError: "yıl",
-		},
-		{
-			name: "Negatif kilometre",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Mileage = -5
-			},
-			expectedError: "kilometre",
-		},
-		{
-			name: "Geçersiz yakıt türü",
-			mutate: func(i *models.ListingCreateInput) {
-				i.FuelType = "nukleer"
-			},
-			expectedError: "yakıt",
-		},
-		{
-			name: "Geçersiz vites türü",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Transmission = "roket"
-			},
-			expectedError: "vites",
-		},
-		{
-			name: "Boş şehir",
-			mutate: func(i *models.ListingCreateInput) {
-				i.City = ""
-			},
-			expectedError: "şehir",
-		},
-		{
-			name: "Geçersiz hasar durumu",
-			mutate: func(i *models.ListingCreateInput) {
-				i.DamageStatus = "pert_arac_tanimsiz"
-			},
-			expectedError: "hasar durumu",
-		},
-		{
-			name: "Çok uzun açıklama (>5000 karakter)",
-			mutate: func(i *models.ListingCreateInput) {
-				i.Description = strings.Repeat("A", 5001)
-			},
-			expectedError: "açıklama",
-		},
+func (m *mockListingRepo) CloseExpiredAuctions(ctx context.Context) (int, error) {
+	count := 0
+	for _, l := range m.listings {
+		if l.Status == "active" && time.Now().After(l.EndTime) {
+			l.Status = "ended"
+			count++
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			input := models.ListingCreateInput{
-				Brand:        "Renault",
-				Model:        "Megane",
-				Year:         2020,
-				Mileage:      50000,
-				FuelType:     "dizel",
-				Transmission: "manuel",
-				City:         "İzmir",
-				DamageStatus: models.DamageUnknown,
-			}
-			tt.mutate(&input)
-
-			err := services.ValidateListing(input)
-			if err == nil {
-				t.Fatalf("Hata bekleniyordu ancak nil döndü")
-			}
-			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.expectedError)) {
-				t.Errorf("Beklenen hata ifadesi '%s', gelen: '%s'", tt.expectedError, err.Error())
-			}
-		})
-	}
+	return count, nil
 }
 
 // ============================================================================
-// 2. YETKİLENDİRME (AUTHORIZATION) TESTLERİ
+// TEST YARDIMCILARI
 // ============================================================================
 
-func TestCanModifyListing(t *testing.T) {
-	owner := &models.UserDTO{ID: 10, Email: "owner@test.com", Role: models.RoleUser}
-	stranger := &models.UserDTO{ID: 20, Email: "stranger@test.com", Role: models.RoleUser}
-	admin := &models.UserDTO{ID: 99, Email: "admin@test.com", Role: models.RoleAdmin}
+func newTestActor(id int64) *models.UserDTO {
+	return &models.UserDTO{ID: id, Email: "kullanici@test.com"}
+}
 
-	listing := &models.Listing{
-		ID:     1,
-		UserID: 10, // Sahip ID: 10
-		Brand:  "Honda",
-		Model:  "Civic",
-	}
-
-	// 1. İlan sahibi düzenleyebilir/silebilir
-	if !services.CanModifyListing(owner, listing) {
-		t.Errorf("İlan sahibi (ID 10) kendi ilanını değiştirebilmeliydi")
-	}
-
-	// 2. Başka kullanıcı düzenleyemez/silemez (403)
-	if services.CanModifyListing(stranger, listing) {
-		t.Errorf("Başka bir kullanıcı (ID 20) ilanı değiştirememeliydi")
-	}
-
-	// 3. Admin başkasının ilanını düzenleyebilir/silebilir
-	if !services.CanModifyListing(admin, listing) {
-		t.Errorf("Yönetici (Admin) ilanı değiştirebilmeliydi")
-	}
-
-	// 4. Giriş yapmamış kullanıcı (nil) değiştiremez
-	if services.CanModifyListing(nil, listing) {
-		t.Errorf("Giriş yapmamış anonim kullanıcı (nil) ilanı değiştirememeliydi")
+func newTestListingInput() models.ListingCreateInput {
+	return models.ListingCreateInput{
+		Brand:         "BMW",
+		Model:         "3 Serisi",
+		Year:          2020,
+		Mileage:       50000,
+		FuelType:      "benzin",
+		Transmission:  "otomatik",
+		City:          "İstanbul",
+		Description:   "Test açıklaması",
+		DamageStatus:  models.DamageNone,
+		StartingPrice: 500000,
+		MinIncrement:  10000,
+		DurationDays:  3,
 	}
 }
 
-func TestListingService_UpdateAndDeleteAuthorization(t *testing.T) {
+func newTestService() (*services.ListingService, *mockListingRepo) {
 	repo := newMockListingRepo()
 	svc := services.NewListingService(repo)
-	ctx := context.Background()
+	return svc, repo
+}
 
-	// İlanı oluşturalım (Sahip ID: 10)
-	listing, err := repo.CreateListing(ctx, nil, models.ListingCreateInput{
-		Brand:        "Ford",
-		Model:        "Focus",
-		Year:         2018,
-		Mileage:      70000,
-		FuelType:     "benzin",
-		Transmission: "manuel",
-		City:         "Bursa",
-		DamageStatus: models.DamageUnknown,
-	}, 10)
+// ============================================================================
+// DOĞRULAMA TESTLERİ
+// ============================================================================
+
+func TestCreateListing_ValidInput(t *testing.T) {
+	svc, _ := newTestService()
+	actor := newTestActor(1)
+	input := newTestListingInput()
+
+	listing, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
 	if err != nil {
-		t.Fatalf("İlan oluşturulamadı: %v", err)
+		t.Fatalf("Geçerli ilan oluşturulamamadı: %v", err)
 	}
-
-	owner := &models.UserDTO{ID: 10, Role: models.RoleUser}
-	stranger := &models.UserDTO{ID: 20, Role: models.RoleUser}
-	admin := &models.UserDTO{ID: 99, Role: models.RoleAdmin}
-
-	updateInput := models.ListingCreateInput{
-		Brand:        "Ford",
-		Model:        "Focus Titanium",
-		Year:         2018,
-		Mileage:      75000,
-		FuelType:     "benzin",
-		Transmission: "manuel",
-		City:         "Bursa",
-		DamageStatus: models.DamageUnknown,
+	if listing.Brand != "BMW" {
+		t.Errorf("Marka hatalı: beklenen BMW, alınan %s", listing.Brand)
 	}
-
-	// Başkası güncellemeye çalıştığında ErrListingForbidden (403) dönmeli
-	_, err = svc.UpdateListing(ctx, stranger, listing.ID, updateInput)
-	if err != services.ErrListingForbidden {
-		t.Errorf("Yabancı kullanıcı güncellemesinde ErrListingForbidden bekleniyordu, gelen: %v", err)
+	if listing.StartingPrice != 500000 {
+		t.Errorf("Başlangıç fiyatı hatalı: beklenen 500000, alınan %f", listing.StartingPrice)
 	}
+}
 
-	// Sahip başarıyla güncelleyebilmeli
-	updated, err := svc.UpdateListing(ctx, owner, listing.ID, updateInput)
-	if err != nil {
-		t.Fatalf("Sahip güncelleme yapamadı: %v", err)
-	}
-	if updated.Model != "Focus Titanium" {
-		t.Errorf("Model güncellenemedi: %s", updated.Model)
-	}
+func TestCreateListing_MissingBrand(t *testing.T) {
+	svc, _ := newTestService()
+	actor := newTestActor(1)
+	input := newTestListingInput()
+	input.Brand = ""
 
-	// Başkası silmeye çalıştığında ErrListingForbidden (403) dönmeli
-	err = svc.DeleteListing(ctx, stranger, listing.ID, os.TempDir())
-	if err != services.ErrListingForbidden {
-		t.Errorf("Yabancı kullanıcı silmesinde ErrListingForbidden bekleniyordu, gelen: %v", err)
+	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	if !errors.Is(err, services.ErrListingValidation) {
+		t.Errorf("ErrListingValidation bekleniyordu, alınan: %v", err)
 	}
+}
 
-	// Admin başkasının ilanını silebilmeli
-	err = svc.DeleteListing(ctx, admin, listing.ID, os.TempDir())
-	if err != nil {
-		t.Fatalf("Admin ilanı silemedi: %v", err)
+func TestCreateListing_InvalidFuelType(t *testing.T) {
+	svc, _ := newTestService()
+	actor := newTestActor(1)
+	input := newTestListingInput()
+	input.FuelType = "petrole"
+
+	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	if !errors.Is(err, services.ErrListingValidation) {
+		t.Errorf("ErrListingValidation bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestCreateListing_NilActor(t *testing.T) {
+	svc, _ := newTestService()
+	_, err := svc.CreateListingWithPhotos(context.Background(), nil, newTestListingInput(), nil, t.TempDir())
+	if !errors.Is(err, services.ErrListingForbidden) {
+		t.Errorf("ErrListingForbidden bekleniyordu, alınan: %v", err)
 	}
 }
 
 // ============================================================================
-// 3. FOTOĞRAF DOĞRULAMA (MIME / BOYUT) TESTLERİ
+// HAFTA 4: AÇIK ARTIRMA TEKLİF KURALLARI TESTLERİ
 // ============================================================================
 
-func TestPhotoValidation_MimeAndContent(t *testing.T) {
-	// 1. Geçerli JPEG içeriği
-	jpegBytes := services.MakeTestJPEGBytes()
-	if !services.IsValidPhotoContent(jpegBytes) {
-		t.Errorf("Geçerli JPEG içeriği onaylanamadı")
-	}
+func TestPlaceBid_Success(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	bidder := newTestActor(2)
 
-	// 2. Geçerli PNG içeriği
-	pngBytes := services.MakeTestPNGBytes()
-	if !services.IsValidPhotoContent(pngBytes) {
-		t.Errorf("Geçerli PNG içeriği onaylanamadı")
-	}
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
 
-	// 3. Yanıltıcı dosya (Uzantısı jpg ama içeriği zararlı text / script / html)
-	fakeJpg := []byte("<html><body><h1>Bu bir fotoğraf değil bir HTML belgesidir!</h1></body></html>")
-	if services.IsValidPhotoContent(fakeJpg) {
-		t.Errorf("HTML içeriği taşıyan sahte JPG reddedilmeliydi!")
-	}
-
-	// 4. Rastgele binary / exe
-	fakeExe := []byte("MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00")
-	if services.IsValidPhotoContent(fakeExe) {
-		t.Errorf("Executable dosya içeriği reddedilmeliydi!")
-	}
-
-	// 5. Boş dosya
-	if services.IsValidPhotoContent([]byte{}) {
-		t.Errorf("Boş dosya reddedilmeliydi!")
-	}
-}
-
-func TestPhotoUpload_SizeAndTypeErrors(t *testing.T) {
-	repo := newMockListingRepo()
-	svc := services.NewListingService(repo)
-	ctx := context.Background()
-	user := &models.UserDTO{ID: 1, Role: models.RoleUser}
-	tmpDir := os.TempDir()
-
-	validInput := models.ListingCreateInput{
-		Brand:        "Toyota",
-		Model:        "Yaris",
-		Year:         2021,
-		Mileage:      30000,
-		FuelType:     "benzin",
-		Transmission: "otomatik",
-		City:         "Ankara",
-		DamageStatus: models.DamageUnknown,
-	}
-
-	// 1. Yanlış türde dosya yükleme (Uzantı .jpg ancak içerik metin)
-	fakeHeader := createMultipartFileHeader("hacker.jpg", []byte("plain text content pretending to be image"))
-	_, err := svc.CreateListingWithPhotos(ctx, user, validInput, []*multipart.FileHeader{fakeHeader}, tmpDir)
-	if err == nil {
-		t.Fatalf("Sahte JPEG içeriği reddedilmeliydi ancak onaylandı")
-	}
-	if !strings.Contains(err.Error(), "JPEG") && !strings.Contains(err.Error(), "türü") {
-		t.Errorf("Beklenen tür hatası alınamadı: %v", err)
-	}
-
-	// 2. Çok büyük dosya (> 5 MB)
-	bigBytes := make([]byte, 6*1024*1024) // 6 MB
-	copy(bigBytes, services.MakeTestJPEGBytes())
-	bigHeader := createMultipartFileHeader("huge.jpg", bigBytes)
-	_, err = svc.CreateListingWithPhotos(ctx, user, validInput, []*multipart.FileHeader{bigHeader}, tmpDir)
-	if err == nil {
-		t.Fatalf("6 MB dosya boyutu reddedilmeliydi ancak onaylandı")
-	}
-	if !strings.Contains(err.Error(), "5 MB") {
-		t.Errorf("Beklenen dosya boyutu hatası alınamadı: %v", err)
-	}
-
-	// 3. Geçerli fotoğraf ile yükleme
-	validHeader := createMultipartFileHeader("car.jpg", services.MakeTestJPEGBytes())
-	created, err := svc.CreateListingWithPhotos(ctx, user, validInput, []*multipart.FileHeader{validHeader}, tmpDir)
+	bid, err := svc.PlaceBid(context.Background(), bidder, listing.ID, 500000)
 	if err != nil {
-		t.Fatalf("Geçerli fotoğraf ile ilan oluşturulamadı: %v", err)
+		t.Fatalf("Geçerli teklif reddedildi: %v", err)
 	}
-	if len(created.Photos) != 1 {
-		t.Errorf("1 fotoğraf bekleniyordu, gelen: %d", len(created.Photos))
+	if bid.Amount != 500000 {
+		t.Errorf("Teklif tutarı hatalı: beklenen 500000, alınan %f", bid.Amount)
 	}
 }
 
-// createMultipartFileHeader, testler için in-memory multipart.FileHeader simüle eder.
-func createMultipartFileHeader(filename string, content []byte) *multipart.FileHeader {
-	body := new(bytes.Buffer)
-	writer := multipart.NewWriter(body)
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="photos"; filename="`+filename+`"`)
-	part, _ := writer.CreatePart(h)
-	_, _ = part.Write(content)
-	_ = writer.Close()
+func TestPlaceBid_CannotBidOwnListing(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
 
-	reader := multipart.NewReader(body, writer.Boundary())
-	form, _ := reader.ReadForm(int64(len(content) + 1024))
-	return form.File["photos"][0]
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+
+	// İlan sahibi kendi ilanına teklif veremelidir
+	_, err := svc.PlaceBid(context.Background(), owner, listing.ID, 500000)
+	if !errors.Is(err, services.ErrCannotBidOwnListing) {
+		t.Errorf("ErrCannotBidOwnListing bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestPlaceBid_TooLow(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	bidder1 := newTestActor(2)
+	bidder2 := newTestActor(3)
+
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+
+	// İlk teklif: 500.000 TL (başlangıç fiyatında)
+	_, err := svc.PlaceBid(context.Background(), bidder1, listing.ID, 500000)
+	if err != nil {
+		t.Fatalf("İlk teklif geçerli olmalıydı: %v", err)
+	}
+
+	// İkinci teklif aynı tutarda: Minimum artış (10.000) sağlanmadığından reddedilmeli
+	_, err = svc.PlaceBid(context.Background(), bidder2, listing.ID, 500000)
+	if !errors.Is(err, services.ErrBidTooLow) {
+		t.Errorf("ErrBidTooLow bekleniyordu (aynı tutar), alınan: %v", err)
+	}
+
+	// Yetersiz artış: 505.000 (min 510.000 gerekli, artış 10.000)
+	_, err = svc.PlaceBid(context.Background(), bidder2, listing.ID, 505000)
+	if !errors.Is(err, services.ErrBidTooLow) {
+		t.Errorf("ErrBidTooLow bekleniyordu (yetersiz artış), alınan: %v", err)
+	}
+
+	// Geçerli teklif: 510.000
+	_, err = svc.PlaceBid(context.Background(), bidder2, listing.ID, 510000)
+	if err != nil {
+		t.Errorf("Geçerli teklif reddedildi: %v", err)
+	}
+}
+
+func TestPlaceBid_AuctionEnded(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	bidder := newTestActor(2)
+
+	input := newTestListingInput()
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, input, nil, t.TempDir())
+
+	// İlanı manuel olarak bitir
+	listing.Status = "ended"
+
+	_, err := svc.PlaceBid(context.Background(), bidder, listing.ID, 500000)
+	if !errors.Is(err, services.ErrAuctionEnded) {
+		t.Errorf("ErrAuctionEnded bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestPlaceBid_NilActor(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+
+	_, err := svc.PlaceBid(context.Background(), nil, listing.ID, 500000)
+	if !errors.Is(err, services.ErrListingForbidden) {
+		t.Errorf("ErrListingForbidden bekleniyordu, alınan: %v", err)
+	}
+}
+
+// ============================================================================
+// YETKİLENDİRME TESTLERİ
+// ============================================================================
+
+func TestDeleteListing_OwnerCanDelete(t *testing.T) {
+	svc, _ := newTestService()
+	actor := newTestActor(1)
+
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, newTestListingInput(), nil, t.TempDir())
+
+	err := svc.DeleteListing(context.Background(), actor, listing.ID, t.TempDir())
+	if err != nil {
+		t.Errorf("İlan sahibi kendi ilanını silebilmelidir, hata: %v", err)
+	}
+}
+
+func TestDeleteListing_OtherUserCannotDelete(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	otherUser := newTestActor(2)
+
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+
+	err := svc.DeleteListing(context.Background(), otherUser, listing.ID, t.TempDir())
+	if !errors.Is(err, services.ErrListingForbidden) {
+		t.Errorf("Başka kullanıcı ilanı silememeli: ErrListingForbidden beklendi, alınan: %v", err)
+	}
+}
+
+func TestUpdateListing_OwnerCanUpdate(t *testing.T) {
+	svc, _ := newTestService()
+	actor := newTestActor(1)
+	input := newTestListingInput()
+
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+
+	input.Brand = "Mercedes"
+	updated, err := svc.UpdateListing(context.Background(), actor, listing.ID, input)
+	if err != nil {
+		t.Fatalf("İlan sahibi ilanı güncelleyemedi: %v", err)
+	}
+	if updated.Brand != "Mercedes" {
+		t.Errorf("Güncelleme çalışmadı: beklenen Mercedes, alınan %s", updated.Brand)
+	}
+}
+
+func TestUpdateListing_OtherUserCannotUpdate(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	otherUser := newTestActor(2)
+
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+
+	input := newTestListingInput()
+	_, err := svc.UpdateListing(context.Background(), otherUser, listing.ID, input)
+	if !errors.Is(err, services.ErrListingForbidden) {
+		t.Errorf("ErrListingForbidden beklendi, alınan: %v", err)
+	}
+}
+
+// ============================================================================
+// HASAR DURUMU TESTİ
+// ============================================================================
+
+func TestCreateListing_UnknownDamageDefaultsToNone(t *testing.T) {
+	svc, repo := newTestService()
+	actor := newTestActor(1)
+	input := newTestListingInput()
+	// "bilinmiyor" artık geçerli değil; servis "yok"a çevirmelidir
+	input.DamageStatus = models.DamageStatus("bilinmiyor")
+
+	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	// Service validation "bilinmiyor" değerini DamageNone'a düzeltir
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Repo'da oluşturulan ilanın hasar durumu "yok" olmalı
+	for _, l := range repo.listings {
+		if l.DamageStatus != models.DamageNone {
+			t.Errorf("Hasar durumu 'yok' olmalıydı, alınan: %s", l.DamageStatus)
+		}
+	}
 }

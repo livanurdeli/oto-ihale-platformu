@@ -1,5 +1,19 @@
 package db
 
+// ============================================================================
+// ADIM 2.3: VERİTABANI GÖÇ YÖNETİMİ (DATABASE MIGRATIONS)
+// ============================================================================
+// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
+// 1. Şema Versiyonlama (Schema Versioning): Veritabanı tabloları elle (pgAdmin'den vb.)
+//    değil, kodla sürüm kontrolü altında yönetilir.
+// 2. Takip Tablosu (schema_migrations): Hangi .sql dosyalarının daha önce
+//    çalıştırıldığı bu tabloda tutulur. Böylece daha önce uygulanan bir SQL
+//    dosyası ikinci kez çalıştırılmaz (Idempotency).
+// 3. Sıralı & Güvenli Uygulama: Dosyalar alfabetik sıraya göre (001_..., 002_...)
+//    okunur ve her bir dosya ayrı bir TRANSACTION içinde çalıştırılır. Dosyanın
+//    içinde bir syntax hatası olursa o dosya rollback edilir ve sunucu hata verir.
+// ============================================================================
+
 import (
 	"database/sql"
 	"fmt"

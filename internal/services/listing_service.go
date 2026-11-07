@@ -1,10 +1,25 @@
 package services
 
+// ============================================================================
+// ADIM 6.2: İŞ MANTIĞI KATMANI - LISTING SERVICE (AÇIK ARTIRMA DESTEKLİ)
+// ============================================================================
+// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
+// 1. Açık Artırma ve Teklif Kuralları:
+//    - Kullanıcı kendi ilanına teklif veremez.
+//    - Süresi bitmiş veya pasif ilana teklif verilemez.
+//    - Veritabanı transaction'ı (Pessimistic Locking) ile eşzamanlı teklif
+//      çakışmaları engellenir.
+// 2. Yetkilendirme:
+//    - Admin rolü kaldırılmıştır; ilanı yalnızca ilanı oluşturan kullanıcı
+//      (ilan sahibi) düzenleyebilir veya silebilir.
+// 3. Hasar Durumu:
+//    - "Bilinmiyor" kaldırılmıştır; varsayılan durum "yok" (Hasar Yok)tur.
+// ============================================================================
+
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,34 +38,19 @@ import (
 // HATA TANIMLARI
 // ============================================================================
 var (
-	ErrListingNotFound      = errors.New("ilan bulunamadı")
-	ErrListingForbidden     = errors.New("bu işlem için yetkiniz yok")
-	ErrListingValidation    = errors.New("ilan doğrulama hatası")
-	ErrTooManyPhotos        = errors.New("ilan başına en fazla 10 fotoğraf yüklenebilir")
-	ErrPhotoTooLarge        = errors.New("fotoğraf dosyası 5 MB'dan büyük olamaz")
-	ErrPhotoInvalidType     = errors.New("yalnızca JPEG, PNG ve WebP fotoğraf yüklenebilir")
-	ErrPhotoCountLimit      = 10
-	ErrPhotoMaxBytes  int64 = 5 * 1024 * 1024 // 5 MB
+	ErrListingNotFound   = errors.New("ilan bulunamadı")
+	ErrListingForbidden  = errors.New("bu işlem için yetkiniz yok (yalnızca ilan sahibi silebilir/düzenleyebilir)")
+	ErrListingValidation = errors.New("ilan doğrulama hatası")
+	ErrTooManyPhotos     = errors.New("ilan başına en fazla 10 fotoğraf yüklenebilir")
+	ErrPhotoTooLarge     = errors.New("fotoğraf dosyası 5 MB'dan büyük olamaz")
+	ErrPhotoInvalidType  = errors.New("yalnızca JPEG, PNG ve WebP fotoğraf yüklenebilir")
+	ErrPhotoCountLimit   = 10
+	ErrPhotoMaxBytes     = int64(5 * 1024 * 1024) // 5 MB
+
+	ErrCannotBidOwnListing = repository.ErrCannotBidOwnListing
+	ErrAuctionEnded        = repository.ErrAuctionEnded
+	ErrBidTooLow           = repository.ErrBidTooLow
 )
-
-// ============================================================================
-// LISTING SERVICE INTERFACE
-// ============================================================================
-
-// ListingRepositoryInterface, ListingService'in bağımlı olduğu repository sözleşmesidir (DIP).
-type ListingRepositoryInterface interface {
-	CreateListing(ctx context.Context, tx *sql.Tx, input models.ListingCreateInput, userID int64) (*models.Listing, error)
-	GetListingByID(ctx context.Context, id int64) (*models.Listing, error)
-	ListListings(ctx context.Context, filter models.ListingFilter) (*models.Page[*models.Listing], error)
-	GetListingsByUserID(ctx context.Context, userID int64) ([]*models.Listing, error)
-	UpdateListing(ctx context.Context, id int64, input models.ListingCreateInput) (*models.Listing, error)
-	DeleteListing(ctx context.Context, id int64) error
-	AddPhoto(ctx context.Context, tx *sql.Tx, listingID int64, photoURL string, order int) (*models.ListingPhoto, error)
-	GetPhotosByListingID(ctx context.Context, listingID int64) ([]models.ListingPhoto, error)
-	DeletePhoto(ctx context.Context, photoID int64) (*models.ListingPhoto, error)
-	CountPhotosByListingID(ctx context.Context, listingID int64) (int, error)
-	BeginTx(ctx context.Context) (*sql.Tx, error)
-}
 
 // ListingServiceInterface, controller ile service arasındaki sözleşmedir.
 type ListingServiceInterface interface {
@@ -60,97 +60,23 @@ type ListingServiceInterface interface {
 	GetMyListings(ctx context.Context, userID int64) ([]*models.Listing, error)
 	UpdateListing(ctx context.Context, actor *models.UserDTO, id int64, input models.ListingCreateInput) (*models.Listing, error)
 	DeleteListing(ctx context.Context, actor *models.UserDTO, id int64, uploadsDir string) error
+
+	// Açık artırma
+	PlaceBid(ctx context.Context, actor *models.UserDTO, listingID int64, amount float64) (*models.Bid, error)
+	GetBids(ctx context.Context, listingID int64) ([]models.Bid, error)
+	CloseExpiredAuctions(ctx context.Context) (int, error)
 }
 
-// ============================================================================
-// LISTING SERVICE
-// ============================================================================
-
+// ListingService, ilan ve açık artırma iş kuralları servisi.
 type ListingService struct {
-	repo ListingRepositoryInterface
+	repo repository.ListingRepositoryInterface
 }
 
-func NewListingService(repo ListingRepositoryInterface) *ListingService {
+func NewListingService(repo repository.ListingRepositoryInterface) *ListingService {
 	return &ListingService{repo: repo}
 }
 
-// ============================================================================
-// DOĞRULAMA
-// ============================================================================
-
-// ValidateListing, ilan form girdisini doğrular. Hatalar birleşik mesaj olarak döner.
-func ValidateListing(input models.ListingCreateInput) error {
-	var errs []string
-
-	if strings.TrimSpace(input.Brand) == "" {
-		errs = append(errs, "marka zorunludur")
-	} else if len(input.Brand) > 100 {
-		errs = append(errs, "marka en fazla 100 karakter olabilir")
-	}
-
-	if strings.TrimSpace(input.Model) == "" {
-		errs = append(errs, "model zorunludur")
-	} else if len(input.Model) > 100 {
-		errs = append(errs, "model en fazla 100 karakter olabilir")
-	}
-
-	currentYear := time.Now().Year()
-	if input.Year < 1950 || input.Year > currentYear+1 {
-		errs = append(errs, fmt.Sprintf("yıl 1950 ile %d arasında olmalıdır", currentYear+1))
-	}
-
-	if input.Mileage < 0 {
-		errs = append(errs, "kilometre 0 veya daha büyük olmalıdır")
-	}
-
-	if !models.AllowedFuelTypes[strings.ToLower(input.FuelType)] {
-		errs = append(errs, "geçersiz yakıt tipi; benzin, dizel, lpg, elektrik, hibrit veya hidrojen olmalıdır")
-	}
-
-	if !models.AllowedTransmissions[strings.ToLower(input.Transmission)] {
-		errs = append(errs, "geçersiz vites tipi; manuel, otomatik veya yari-otomatik olmalıdır")
-	}
-
-	if strings.TrimSpace(input.City) == "" {
-		errs = append(errs, "şehir zorunludur")
-	} else if len(input.City) > 100 {
-		errs = append(errs, "şehir en fazla 100 karakter olabilir")
-	}
-
-	if len(input.Description) > 5000 {
-		errs = append(errs, "açıklama en fazla 5000 karakter olabilir")
-	}
-
-	if input.DamageStatus == "" {
-		errs = append(errs, "hasar durumu zorunludur")
-	} else if !input.DamageStatus.IsValid() {
-		errs = append(errs, "geçersiz hasar durumu seçildi")
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("%w: %s", ErrListingValidation, strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-// ============================================================================
-// YETKİ KONTROLÜ
-// ============================================================================
-
-// CanModifyListing, aktör ilanın sahibi veya admin mi kontrol eder.
-func CanModifyListing(actor *models.UserDTO, listing *models.Listing) bool {
-	if actor == nil || listing == nil {
-		return false
-	}
-	return actor.ID == listing.UserID || actor.Role == models.RoleAdmin
-}
-
-// ============================================================================
-// CRUD İŞLEMLERİ
-// ============================================================================
-
-// CreateListingWithPhotos, ilanı ve fotoğraflarını aynı transaction içinde oluşturur.
-// Hata olursa transaction geri alınır; yarım ilan kalmaz. Yüklenen fotoğraflar da temizlenir.
+// CreateListingWithPhotos, transaction içinde ilanı ve fotoğraflarını kaydeder.
 func (s *ListingService) CreateListingWithPhotos(
 	ctx context.Context,
 	actor *models.UserDTO,
@@ -158,7 +84,15 @@ func (s *ListingService) CreateListingWithPhotos(
 	files []*multipart.FileHeader,
 	uploadsDir string,
 ) (*models.Listing, error) {
-	if err := ValidateListing(input); err != nil {
+	if actor == nil {
+		return nil, ErrListingForbidden
+	}
+
+	if input.DamageStatus == "" || string(input.DamageStatus) == "bilinmiyor" || !input.DamageStatus.IsValid() {
+		input.DamageStatus = models.DamageNone
+	}
+
+	if err := s.validateListingInput(&input); err != nil {
 		return nil, err
 	}
 
@@ -166,251 +100,242 @@ func (s *ListingService) CreateListingWithPhotos(
 		return nil, ErrTooManyPhotos
 	}
 
-	// Dosyaları önce doğrula (disk yazımına geçmeden önce)
-	type validFile struct {
-		header  *multipart.FileHeader
-		content []byte
-	}
-	var validFiles []validFile
-
+	// 1. Fotoğrafları doğrula
 	for _, fh := range files {
-		if fh == nil || fh.Size == 0 {
-			continue
-		}
 		if fh.Size > ErrPhotoMaxBytes {
-			return nil, ErrPhotoTooLarge
+			return nil, fmt.Errorf("%w: %s (%d bayt)", ErrPhotoTooLarge, fh.Filename, fh.Size)
 		}
-		f, err := fh.Open()
-		if err != nil {
-			return nil, fmt.Errorf("fotoğraf açılamadı: %w", err)
+		if err := validatePhotoHeader(fh); err != nil {
+			return nil, err
 		}
-		defer f.Close()
-
-		content, err := io.ReadAll(io.LimitReader(f, ErrPhotoMaxBytes+1))
-		if err != nil {
-			return nil, fmt.Errorf("fotoğraf okunamadı: %w", err)
-		}
-		if int64(len(content)) > ErrPhotoMaxBytes {
-			return nil, ErrPhotoTooLarge
-		}
-		if !isAllowedPhotoType(content) {
-			return nil, ErrPhotoInvalidType
-		}
-		validFiles = append(validFiles, validFile{header: fh, content: content})
 	}
 
-	// Transaction başlat
+	// 2. Transaction başlat
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("transaction başlatılamadı: %w", err)
 	}
 
-	listing, err := s.repo.CreateListing(ctx, tx, input, actor.ID)
-	if err != nil {
+	var savedDiskPaths []string
+	rollbackCleanup := func() {
 		if tx != nil {
 			_ = tx.Rollback()
 		}
-		return nil, fmt.Errorf("ilan kaydedilemedi: %w", err)
+		for _, p := range savedDiskPaths {
+			_ = os.Remove(p)
+		}
 	}
 
-	// Fotoğrafları kaydet
-	var savedPaths []string
-	for i, vf := range validFiles {
-		ext := allowedExt(vf.content)
-		filename, err := randomFilename(ext)
-		if err != nil {
-			if tx != nil {
-				_ = tx.Rollback()
-			}
-			cleanupFiles(savedPaths)
-			return nil, fmt.Errorf("dosya adı oluşturulamadı: %w", err)
-		}
+	// 3. İlanı veritabanına ekle
+	listing, err := s.repo.CreateListing(ctx, tx, input, actor.ID)
+	if err != nil {
+		rollbackCleanup()
+		return nil, fmt.Errorf("ilan oluşturulamadı: %w", err)
+	}
 
-		destPath := filepath.Join(uploadsDir, filename)
-		if err := os.WriteFile(destPath, vf.content, 0644); err != nil {
-			if tx != nil {
-				_ = tx.Rollback()
-			}
-			cleanupFiles(savedPaths)
-			return nil, fmt.Errorf("fotoğraf diske yazılamadı: %w", err)
+	// 4. Fotoğrafları diske ve DB'ye yaz
+	for i, fh := range files {
+		ext := strings.ToLower(filepath.Ext(fh.Filename))
+		if ext == "" {
+			ext = ".jpg"
 		}
-		savedPaths = append(savedPaths, destPath)
+		randomName := generateRandomFilename(ext)
+		destPath := filepath.Join(uploadsDir, randomName)
 
-		photoURL := "/uploads/" + filename
-		photo, err := s.repo.AddPhoto(ctx, tx, listing.ID, photoURL, i)
-		if err != nil {
-			if tx != nil {
-				_ = tx.Rollback()
-			}
-			cleanupFiles(savedPaths)
+		if err := saveUploadedFile(fh, destPath); err != nil {
+			rollbackCleanup()
 			return nil, fmt.Errorf("fotoğraf kaydedilemedi: %w", err)
 		}
-		listing.Photos = append(listing.Photos, *photo)
+		savedDiskPaths = append(savedDiskPaths, destPath)
+
+		photoURL := "/uploads/" + randomName
+		_, err = s.repo.AddPhoto(ctx, tx, listing.ID, photoURL, i)
+		if err != nil {
+			rollbackCleanup()
+			return nil, fmt.Errorf("fotoğraf DB kaydı yapılamadı: %w", err)
+		}
 	}
 
+	// 5. Transaction Commit
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
-			cleanupFiles(savedPaths)
-			return nil, fmt.Errorf("transaction commit hatası: %w", err)
+			rollbackCleanup()
+			return nil, fmt.Errorf("transaction onaylanamadı: %w", err)
 		}
 	}
 
-	if len(listing.Photos) > 0 {
-		listing.CoverPhotoURL = listing.Photos[0].PhotoURL
-	}
-	return listing, nil
+	return s.repo.GetListingByID(ctx, listing.ID)
 }
 
-// GetListing, tek ilanı getirir.
 func (s *ListingService) GetListing(ctx context.Context, id int64) (*models.Listing, error) {
-	listing, err := s.repo.GetListingByID(ctx, id)
-	if err != nil {
-		if errors.Is(err, repository.ErrListingNotFound) {
-			return nil, ErrListingNotFound
-		}
-		return nil, err
-	}
-	return listing, nil
+	return s.repo.GetListingByID(ctx, id)
 }
 
-// ListListings, filtrelenmiş ve sayfalanmış ilan listesi döner.
 func (s *ListingService) ListListings(ctx context.Context, filter models.ListingFilter) (*models.Page[*models.Listing], error) {
 	return s.repo.ListListings(ctx, filter)
 }
 
-// GetMyListings, kullanıcının kendi ilanlarını döner.
 func (s *ListingService) GetMyListings(ctx context.Context, userID int64) ([]*models.Listing, error) {
 	return s.repo.GetListingsByUserID(ctx, userID)
 }
 
-// UpdateListing, ilanı günceller. Sahip veya admin gerekir.
 func (s *ListingService) UpdateListing(ctx context.Context, actor *models.UserDTO, id int64, input models.ListingCreateInput) (*models.Listing, error) {
-	if err := ValidateListing(input); err != nil {
-		return nil, err
-	}
-
-	existing, err := s.repo.GetListingByID(ctx, id)
-	if err != nil {
-		if errors.Is(err, repository.ErrListingNotFound) {
-			return nil, ErrListingNotFound
-		}
-		return nil, err
-	}
-
-	if !CanModifyListing(actor, existing) {
+	if actor == nil {
 		return nil, ErrListingForbidden
 	}
 
-	updated, err := s.repo.UpdateListing(ctx, id, input)
+	existing, err := s.repo.GetListingByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return updated, nil
-}
 
-// DeleteListing, ilanı ve diskteki fotoğraflarını siler. Sahip veya admin gerekir.
-func (s *ListingService) DeleteListing(ctx context.Context, actor *models.UserDTO, id int64, uploadsDir string) error {
-	existing, err := s.repo.GetListingByID(ctx, id)
-	if err != nil {
-		if errors.Is(err, repository.ErrListingNotFound) {
-			return ErrListingNotFound
-		}
-		return err
+	// Yalnızca ilan sahibi düzenleyebilir
+	if existing.UserID != actor.ID {
+		return nil, ErrListingForbidden
 	}
 
-	if !CanModifyListing(actor, existing) {
+	if input.DamageStatus == "" || string(input.DamageStatus) == "bilinmiyor" || !input.DamageStatus.IsValid() {
+		input.DamageStatus = models.DamageNone
+	}
+
+	if err := s.validateListingInput(&input); err != nil {
+		return nil, err
+	}
+
+	return s.repo.UpdateListing(ctx, id, input)
+}
+
+func (s *ListingService) DeleteListing(ctx context.Context, actor *models.UserDTO, id int64, uploadsDir string) error {
+	if actor == nil {
 		return ErrListingForbidden
 	}
 
-	// Diskteki fotoğraf dosyalarını topla (DB cascade silmeden önce)
-	photos, _ := s.repo.GetPhotosByListingID(ctx, id)
-
-	// İlanı DB'den sil (cascade ile fotoğraf kayıtları da gider)
-	if err := s.repo.DeleteListing(ctx, id); err != nil {
+	existing, err := s.repo.GetListingByID(ctx, id)
+	if err != nil {
 		return err
 	}
 
-	// Diskteki dosyaları temizle
-	for _, p := range photos {
-		filename := strings.TrimPrefix(p.PhotoURL, "/uploads/")
-		if filename != "" {
-			path := filepath.Join(uploadsDir, filename)
-			_ = os.Remove(path)
-		}
+	// Yalnızca ilan sahibi silebilir
+	if existing.UserID != actor.ID {
+		return ErrListingForbidden
 	}
+
+	// Fotoğraf dosyalarını diskten sil
+	for _, p := range existing.Photos {
+		fileName := filepath.Base(p.PhotoURL)
+		diskPath := filepath.Join(uploadsDir, fileName)
+		_ = os.Remove(diskPath)
+	}
+
+	return s.repo.DeleteListing(ctx, id)
+}
+
+// PlaceBid, açık artırmaya yeni bir teklif verir.
+func (s *ListingService) PlaceBid(ctx context.Context, actor *models.UserDTO, listingID int64, amount float64) (*models.Bid, error) {
+	if actor == nil {
+		return nil, ErrListingForbidden
+	}
+	if amount <= 0 {
+		return nil, fmt.Errorf("%w: Teklif tutarı sıfırdan büyük olmalıdır", ErrListingValidation)
+	}
+
+	return s.repo.PlaceBid(ctx, listingID, actor.ID, amount)
+}
+
+// GetBids, ilanın teklif geçmişini döner.
+func (s *ListingService) GetBids(ctx context.Context, listingID int64) ([]models.Bid, error) {
+	return s.repo.GetBidsByListingID(ctx, listingID)
+}
+
+// CloseExpiredAuctions, süresi dolmuş açık artırmaları sonlandırır.
+func (s *ListingService) CloseExpiredAuctions(ctx context.Context) (int, error) {
+	return s.repo.CloseExpiredAuctions(ctx)
+}
+
+// ============================================================================
+// DOĞRULAMA & YARDIMCILAR
+// ============================================================================
+
+func (s *ListingService) validateListingInput(in *models.ListingCreateInput) error {
+	if strings.TrimSpace(in.Brand) == "" {
+		return fmt.Errorf("%w: marka alanı zorunludur", ErrListingValidation)
+	}
+	if strings.TrimSpace(in.Model) == "" {
+		return fmt.Errorf("%w: model alanı zorunludur", ErrListingValidation)
+	}
+	currentYear := time.Now().Year()
+	if in.Year < 1950 || in.Year > currentYear+1 {
+		return fmt.Errorf("%w: yıl 1950 ile %d arasında olmalıdır", ErrListingValidation, currentYear+1)
+	}
+	if in.Mileage < 0 {
+		return fmt.Errorf("%w: kilometre negatif olamaz", ErrListingValidation)
+	}
+	if !models.AllowedFuelTypes[strings.ToLower(in.FuelType)] {
+		return fmt.Errorf("%w: geçersiz yakıt tipi", ErrListingValidation)
+	}
+	if !models.AllowedTransmissions[strings.ToLower(in.Transmission)] {
+		return fmt.Errorf("%w: geçersiz vites tipi", ErrListingValidation)
+	}
+	if strings.TrimSpace(in.City) == "" {
+		return fmt.Errorf("%w: şehir alanı zorunludur", ErrListingValidation)
+	}
+
+	// Hasar Durumu: "bilinmiyor" veya geçersizse otomatik "yok" yapılır
+	if !in.DamageStatus.IsValid() || string(in.DamageStatus) == "bilinmiyor" {
+		in.DamageStatus = models.DamageNone
+	}
+
+	if in.StartingPrice < 0 {
+		return fmt.Errorf("%w: başlangıç fiyatı negatif olamaz", ErrListingValidation)
+	}
+	if in.MinIncrement < 0 {
+		return fmt.Errorf("%w: minimum artış negatif olamaz", ErrListingValidation)
+	}
+
 	return nil
 }
 
-// ============================================================================
-// FOTOĞRAF YARDIMCILARI
-// ============================================================================
+func validatePhotoHeader(fh *multipart.FileHeader) error {
+	file, err := fh.Open()
+	if err != nil {
+		return fmt.Errorf("dosya açılamadı: %w", err)
+	}
+	defer file.Close()
 
-// isAllowedPhotoType, ilk 512 bayta bakarak MIME türünü kontrol eder.
-// Uzantıya değil, içeriğe göre doğrulama yapılır.
-func isAllowedPhotoType(data []byte) bool {
-	if len(data) == 0 {
-		return false
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("dosya okunamadı: %w", err)
 	}
-	sniff := data
-	if len(sniff) > 512 {
-		sniff = sniff[:512]
-	}
-	ct := http.DetectContentType(sniff)
-	return ct == "image/jpeg" || ct == "image/png" || ct == "image/webp"
-}
 
-// allowedExt, içerik tipine göre dosya uzantısı döner.
-func allowedExt(data []byte) string {
-	if len(data) == 0 {
-		return ".bin"
-	}
-	sniff := data
-	if len(sniff) > 512 {
-		sniff = sniff[:512]
-	}
-	switch http.DetectContentType(sniff) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/webp":
-		return ".webp"
+	mime := http.DetectContentType(buf[:n])
+	switch mime {
+	case "image/jpeg", "image/png", "image/webp":
+		return nil
 	default:
-		return ".bin"
+		return fmt.Errorf("%w: %s (tespit edilen tip: %s)", ErrPhotoInvalidType, fh.Filename, mime)
 	}
 }
 
-// randomFilename, crypto/rand kullanarak rastgele dosya adı üretir.
-func randomFilename(ext string) (string, error) {
+func saveUploadedFile(fh *multipart.FileHeader, destPath string) error {
+	src, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+func generateRandomFilename(ext string) string {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x%s", b, ext), nil
-}
-
-// cleanupFiles, başarısız işlem sonrası diske yazılmış dosyaları siler.
-func cleanupFiles(paths []string) {
-	for _, p := range paths {
-		_ = os.Remove(p)
-	}
-}
-
-// isValidPhotoFileForTest, test için dışa açık wrapper.
-func IsValidPhotoContent(data []byte) bool {
-	return isAllowedPhotoType(data)
-}
-
-// MakeTestImageContent, testlerde kullanmak için minimum geçerli JPEG header.
-func MakeTestJPEGBytes() []byte {
-	// JPEG SOI marker
-	return []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00}
-}
-
-// MakeTestPNGBytes, testlerde kullanmak için minimum geçerli PNG header.
-func MakeTestPNGBytes() []byte {
-	return bytes.Join([][]byte{
-		{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
-		make([]byte, 20),
-	}, nil)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b) + ext
 }

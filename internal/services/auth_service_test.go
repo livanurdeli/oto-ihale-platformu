@@ -10,35 +10,37 @@ import (
 	"car-auction-platform/internal/repository"
 )
 
-type MockUserRepository struct {
+// ============================================================================
+// MOCK TANIMLAMALARI
+// ============================================================================
+
+// mockUserRepo, UserRepositoryInterface'i taklit eder (gerçek DB gerekmez).
+type mockUserRepo struct {
 	users map[string]*models.User
 }
 
-func (m *MockUserRepository) CreateUser(ctx context.Context, email, passwordHash string, role models.Role) (*models.User, error) {
+func newMockUserRepo() *mockUserRepo {
+	return &mockUserRepo{users: make(map[string]*models.User)}
+}
+
+func (m *mockUserRepo) CreateUser(ctx context.Context, email, passwordHash string) (*models.User, error) {
 	if _, exists := m.users[email]; exists {
 		return nil, repository.ErrEmailAlreadyTaken
 	}
-	u := &models.User{
-		ID:           int64(len(m.users) + 1),
-		Email:        email,
-		PasswordHash: passwordHash,
-		Role:         role,
-		IsBlocked:    false,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+	user := &models.User{ID: int64(len(m.users) + 1), Email: email, PasswordHash: passwordHash}
+	m.users[email] = user
+	return user, nil
+}
+
+func (m *mockUserRepo) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	u, ok := m.users[email]
+	if !ok {
+		return nil, repository.ErrUserNotFound
 	}
-	m.users[email] = u
 	return u, nil
 }
 
-func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	if u, exists := m.users[email]; exists {
-		return u, nil
-	}
-	return nil, repository.ErrUserNotFound
-}
-
-func (m *MockUserRepository) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
+func (m *mockUserRepo) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
 	for _, u := range m.users {
 		if u.ID == id {
 			return u, nil
@@ -47,97 +49,194 @@ func (m *MockUserRepository) GetUserByID(ctx context.Context, id int64) (*models
 	return nil, repository.ErrUserNotFound
 }
 
-func (m *MockUserRepository) GetUserStatus(ctx context.Context, id int64) (models.Role, bool, error) {
+func (m *mockUserRepo) GetUserStatus(ctx context.Context, id int64) (bool, error) {
 	for _, u := range m.users {
 		if u.ID == id {
-			return u.Role, u.IsBlocked, nil
+			return u.IsBlocked, nil
 		}
 	}
-	return "", false, repository.ErrUserNotFound
+	return false, repository.ErrUserNotFound
 }
 
-func (m *MockUserRepository) GetAllUsers(ctx context.Context) ([]*models.UserDTO, error) {
-	var list []*models.UserDTO
-	for _, u := range m.users {
-		list = append(list, u.ToDTO())
+func (m *mockUserRepo) CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash string) error {
+	if _, exists := m.users[email]; !exists {
+		m.users[email] = &models.User{ID: int64(len(m.users) + 1), Email: email, PasswordHash: passwordHash}
 	}
-	return list, nil
-}
-
-func (m *MockUserRepository) ToggleUserBlock(ctx context.Context, id int64) error {
-	for _, u := range m.users {
-		if u.ID == id {
-			u.IsBlocked = !u.IsBlocked
-			return nil
-		}
-	}
-	return repository.ErrUserNotFound
-}
-
-func (m *MockUserRepository) CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash string, role models.Role) error {
 	return nil
 }
 
-func TestJWTAuthServiceFlow(t *testing.T) {
-	userRepo := &MockUserRepository{users: make(map[string]*models.User)}
-	jwtSecret := "test-secret-key-45601234567890123456"
-	svc := NewAuthService(userRepo, jwtSecret)
+// mockSessionRepo, SessionRepositoryInterface'i taklit eder.
+type mockSessionRepo struct {
+	sessions map[string]*models.Session
+}
+
+func newMockSessionRepo() *mockSessionRepo {
+	return &mockSessionRepo{sessions: make(map[string]*models.Session)}
+}
+
+func (m *mockSessionRepo) CreateSession(ctx context.Context, token string, userID int64, expiresAt time.Time) error {
+	m.sessions[token] = &models.Session{Token: token, UserID: userID, ExpiresAt: expiresAt}
+	return nil
+}
+
+func (m *mockSessionRepo) GetSession(ctx context.Context, token string) (*models.Session, error) {
+	sess, ok := m.sessions[token]
+	if !ok {
+		return nil, repository.ErrSessionNotFound
+	}
+	if sess.IsExpired() {
+		return nil, repository.ErrSessionNotFound
+	}
+	return sess, nil
+}
+
+func (m *mockSessionRepo) DeleteSession(ctx context.Context, token string) error {
+	delete(m.sessions, token)
+	return nil
+}
+
+func (m *mockSessionRepo) DeleteExpiredSessions(ctx context.Context) error {
+	for k, s := range m.sessions {
+		if s.IsExpired() {
+			delete(m.sessions, k)
+		}
+	}
+	return nil
+}
+
+// ============================================================================
+// TESTLER
+// ============================================================================
+
+func newTestAuthService() *AuthService {
+	return NewAuthService(newMockUserRepo(), newMockSessionRepo())
+}
+
+func TestRegister_Success(t *testing.T) {
+	svc := newTestAuthService()
 	ctx := context.Background()
 
-	// 1. Şifre eşleşmeme testi
-	_, _, _, err := svc.Register(ctx, "test@jwt.com", "Password123!", "FarkliSifre!")
-	if !errors.Is(err, ErrPasswordsDoNotMatch) {
-		t.Errorf("Beklenen ErrPasswordsDoNotMatch, alınan: %v", err)
-	}
-
-	// 2. Başarılı Kayıt ve JWT Üretimi (Rol varsayılan user olmalı)
-	user, token, expiresAt, err := svc.Register(ctx, "test@jwt.com", "Password123!", "Password123!")
+	user, token, expiresAt, err := svc.Register(ctx, "yeni@test.com", "Sifre123!", "Sifre123!")
 	if err != nil {
-		t.Fatalf("Register başarısız: %v", err)
+		t.Fatalf("Kayıt başarısız olmamalıydı: %v", err)
 	}
-	if user.Email != "test@jwt.com" || token == "" {
-		t.Error("Kullanıcı e-postası veya JWT token boş olamaz")
+	if user == nil {
+		t.Fatal("Kullanıcı nesnesi nil dönemez")
 	}
-	if user.Role != models.RoleUser {
-		t.Errorf("Kayıt olan kullanıcının rolü RoleUser olmalıdır, alınan: %s", user.Role)
+	if token == "" {
+		t.Fatal("Session token boş dönemez")
 	}
 	if expiresAt.Before(time.Now()) {
-		t.Error("JWT süresi geçmişte olamaz")
+		t.Fatal("Token sona erme tarihi geçmişte olamaz")
 	}
+}
 
-	// 3. JWT Doğrulama (ValidateJWT)
-	claims, err := svc.ValidateJWT(token)
+func TestRegister_DuplicateEmail(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	_, _, _, _ = svc.Register(ctx, "ayni@test.com", "Sifre123!", "Sifre123!")
+	_, _, _, err := svc.Register(ctx, "ayni@test.com", "Sifre123!", "Sifre123!")
+
+	if !errors.Is(err, ErrEmailAlreadyTaken) {
+		t.Errorf("Tekrar kayıt: ErrEmailAlreadyTaken bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestRegister_PasswordMismatch(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	_, _, _, err := svc.Register(ctx, "user@test.com", "Sifre123!", "FarkliSifre!")
+	if !errors.Is(err, ErrPasswordsDoNotMatch) {
+		t.Errorf("ErrPasswordsDoNotMatch bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestRegister_ShortPassword(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	_, _, _, err := svc.Register(ctx, "user@test.com", "123", "123")
+	if !errors.Is(err, ErrPasswordInvalid) {
+		t.Errorf("ErrPasswordInvalid bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestRegister_EmptyFields(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	_, _, _, err := svc.Register(ctx, "", "Sifre123!", "Sifre123!")
+	if !errors.Is(err, ErrRequiredFieldsEmpty) {
+		t.Errorf("ErrRequiredFieldsEmpty bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestLogin_Success(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	// Önce kayıt ol
+	_, _, _, err := svc.Register(ctx, "giris@test.com", "Sifre123!", "Sifre123!")
 	if err != nil {
-		t.Fatalf("Üretilen JWT doğrulanamadı: %v", err)
-	}
-	if claims.UserID != user.ID || claims.Email != user.Email || claims.Role != models.RoleUser {
-		t.Errorf("JWT claims uyuşmuyor: %+v", claims)
+		t.Fatalf("Kayıt yapılamadı: %v", err)
 	}
 
-	// 4. Başarılı Giriş ve Yeni JWT Üretimi
-	loginUser, loginToken, _, err := svc.Login(ctx, "test@jwt.com", "Password123!")
+	// Giriş yap
+	user, token, _, err := svc.Login(ctx, "giris@test.com", "Sifre123!")
 	if err != nil {
-		t.Fatalf("Login başarısız: %v", err)
+		t.Fatalf("Giriş başarısız: %v", err)
 	}
-	if loginUser.ID != user.ID || loginToken == "" {
-		t.Error("Giriş bilgileri uyuşmuyor")
+	if user == nil || token == "" {
+		t.Fatal("Kullanıcı veya token boş dönemez")
 	}
+}
 
-	// 5. Kendi hesabını engellememe testi
-	err = svc.ToggleUserBlock(ctx, user.ID, user.ID)
-	if !errors.Is(err, ErrCannotBlockSelf) {
-		t.Errorf("Kendi hesabını engellemeye çalışırken ErrCannotBlockSelf bekleniyordu, alınan: %v", err)
-	}
+func TestLogin_WrongPassword(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
 
-	// 6. Başka hesabı engelleme ve engelli kullanıcı girişi
-	adminID := int64(999)
-	err = svc.ToggleUserBlock(ctx, adminID, user.ID)
-	if err != nil {
-		t.Fatalf("ToggleUserBlock başarısız: %v", err)
-	}
+	_, _, _, _ = svc.Register(ctx, "wrong@test.com", "DogruSifre!", "DogruSifre!")
+	_, _, _, err := svc.Login(ctx, "wrong@test.com", "YanlisSifre!")
 
-	_, _, _, err = svc.Login(ctx, "test@jwt.com", "Password123!")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("ErrInvalidCredentials bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestLogin_BlockedUser(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	// Kullanıcı oluştur ve engelle
+	_, _, _, _ = svc.Register(ctx, "blocked@test.com", "Sifre123!", "Sifre123!")
+	user, _ := svc.userRepo.GetUserByEmail(ctx, "blocked@test.com")
+	user.IsBlocked = true
+
+	_, _, _, err := svc.Login(ctx, "blocked@test.com", "Sifre123!")
 	if !errors.Is(err, ErrUserIsBlocked) {
-		t.Errorf("Engelli kullanıcı için beklenen ErrUserIsBlocked, alınan: %v", err)
+		t.Errorf("ErrUserIsBlocked bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestLogout(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+
+	_, token, _, err := svc.Register(ctx, "logout@test.com", "Sifre123!", "Sifre123!")
+	if err != nil {
+		t.Fatalf("Kayıt yapılamadı: %v", err)
+	}
+
+	// Logout
+	if err := svc.Logout(ctx, token); err != nil {
+		t.Fatalf("Logout hatası: %v", err)
+	}
+
+	// Token geçersiz olmalı
+	_, err = svc.ValidateSession(ctx, token)
+	if err == nil {
+		t.Error("Logout sonrası session geçersiz olmalıydı")
 	}
 }

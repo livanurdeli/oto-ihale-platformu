@@ -1,5 +1,16 @@
 package services
 
+// ============================================================================
+// ADIM 6.1: İŞ MANTIĞI KATMANI - AUTH SERVICE (STATEFUL SESSION DESTEKLİ)
+// ============================================================================
+// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
+// 1. Session Tabanlı Oturum:
+//    Login ve Register başarılı olduğunda veritabanında 'sessions' tablosuna
+//    yeni bir oturum kaydı açılır (7 gün geçerli) ve token istemciye döner.
+// 2. Role ve Admin Kaldırıldı:
+//    Tüm kullanıcılar sistemde standart kullanıcı olarak işlem yapar.
+// ============================================================================
+
 import (
 	"context"
 	"errors"
@@ -11,42 +22,42 @@ import (
 )
 
 // ============================================================================
-// HATA TANIMLARI (SENTINEL ERRORS)
+// HATA TANIMLARI
 // ============================================================================
 var (
 	ErrInvalidCredentials  = errors.New("e-posta veya şifre hatalı")
 	ErrPasswordsDoNotMatch = errors.New("girdiğiniz şifreler birbiriyle eşleşmiyor")
 	ErrRequiredFieldsEmpty = errors.New("lütfen tüm zorunlu alanları doldurunuz")
-	ErrUserIsBlocked       = errors.New("hesabınız yönetici tarafından engellenmiştir")
-	ErrCannotBlockSelf     = errors.New("kendi hesabınızı engelleyemezsiniz")
+	ErrUserIsBlocked       = errors.New("hesabınız engellenmiştir")
 	ErrEmailAlreadyTaken   = repository.ErrEmailAlreadyTaken
 	ErrPasswordInvalid     = errors.New("şifre en az 6, en fazla 72 karakter olmalıdır")
 )
 
-// AuthServiceInterface, Controller ile Service arasındaki sözleşmedir (SOLID - D).
+const SessionDuration = 7 * 24 * time.Hour // 7 gün
+
+// AuthServiceInterface, Controller ile Service arasındaki sözleşmedir.
 type AuthServiceInterface interface {
 	Register(ctx context.Context, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error)
 	Login(ctx context.Context, email, password string) (*models.UserDTO, string, time.Time, error)
-	ValidateJWT(tokenString string) (*auth.Claims, error)
-	GetAllUsers(ctx context.Context) ([]*models.UserDTO, error)
-	ToggleUserBlock(ctx context.Context, actorID, targetID int64) error
+	Logout(ctx context.Context, token string) error
+	ValidateSession(ctx context.Context, token string) (*models.UserDTO, error)
 }
 
 // AuthService, kimlik doğrulama ve kullanıcı iş mantığı servisi.
 type AuthService struct {
-	userRepo  repository.UserRepositoryInterface
-	jwtSecret string
+	userRepo    repository.UserRepositoryInterface
+	sessionRepo repository.SessionRepositoryInterface
 }
 
 // NewAuthService yeni bir AuthService örneği oluşturur.
-func NewAuthService(userRepo repository.UserRepositoryInterface, jwtSecret string) *AuthService {
+func NewAuthService(userRepo repository.UserRepositoryInterface, sessionRepo repository.SessionRepositoryInterface) *AuthService {
 	return &AuthService{
-		userRepo:  userRepo,
-		jwtSecret: jwtSecret,
+		userRepo:    userRepo,
+		sessionRepo: sessionRepo,
 	}
 }
 
-// Register, yeni kullanıcı kaydı açar. Rol daima RoleUser atanır.
+// Register, yeni kullanıcı kaydı açar ve otomatik oturum başlatır.
 func (s *AuthService) Register(ctx context.Context, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error) {
 	if email == "" || password == "" {
 		return nil, "", time.Time{}, ErrRequiredFieldsEmpty
@@ -60,37 +71,39 @@ func (s *AuthService) Register(ctx context.Context, email, password, passwordCon
 		return nil, "", time.Time{}, ErrPasswordsDoNotMatch
 	}
 
-	hash, err := auth.HashPassword(password)
+	hashed, err := auth.HashPassword(password)
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}
 
-	// Güvenlik Kuralı: İstemciden rol alınmaz, varsayılan rol her zaman RoleUser'dır!
-	user, err := s.userRepo.CreateUser(ctx, email, hash, models.RoleUser)
+	user, err := s.userRepo.CreateUser(ctx, email, hashed)
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}
 
-	// 24 saat geçerli JWT üret
-	token, expiresAt, err := auth.GenerateJWT(user, s.jwtSecret, 24*time.Hour)
+	// Oturum (Session) Token Üret ve Kaydet
+	token, err := auth.GenerateSessionToken()
 	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+
+	expiresAt := time.Now().Add(SessionDuration)
+	if err := s.sessionRepo.CreateSession(ctx, token, user.ID, expiresAt); err != nil {
 		return nil, "", time.Time{}, err
 	}
 
 	return user.ToDTO(), token, expiresAt, nil
 }
 
-// Login, e-posta ve şifre doğrular. Timing attack korumalıdır.
+// Login, kullanıcı girişini doğrular ve yeni bir session oluşturur.
 func (s *AuthService) Login(ctx context.Context, email, password string) (*models.UserDTO, string, time.Time, error) {
-	if len(password) < 6 || len(password) > 72 {
-		// Timing farkını korumak için yine dummy check yap
-		auth.DummyCheckPasswordHash(password)
-		return nil, "", time.Time{}, ErrInvalidCredentials
+	if email == "" || password == "" {
+		return nil, "", time.Time{}, ErrRequiredFieldsEmpty
 	}
 
 	user, err := s.userRepo.GetUserByEmail(ctx, email)
 	if err != nil {
-		// Kullanıcı yoksa bile bcrypt çalıştırarak timing attack'i engelle
+		// Timing attack koruması
 		auth.DummyCheckPasswordHash(password)
 		return nil, "", time.Time{}, ErrInvalidCredentials
 	}
@@ -103,28 +116,33 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*model
 		return nil, "", time.Time{}, ErrUserIsBlocked
 	}
 
-	token, expiresAt, err := auth.GenerateJWT(user, s.jwtSecret, 24*time.Hour)
+	// Oturum (Session) Token Üret ve Kaydet
+	token, err := auth.GenerateSessionToken()
 	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+
+	expiresAt := time.Now().Add(SessionDuration)
+	if err := s.sessionRepo.CreateSession(ctx, token, user.ID, expiresAt); err != nil {
 		return nil, "", time.Time{}, err
 	}
 
 	return user.ToDTO(), token, expiresAt, nil
 }
 
-// ValidateJWT token'ı çözer ve doğrular.
-func (s *AuthService) ValidateJWT(tokenString string) (*auth.Claims, error) {
-	return auth.ValidateJWT(tokenString, s.jwtSecret)
-}
-
-// GetAllUsers kullanıcı listesini PasswordHash olmadan döner.
-func (s *AuthService) GetAllUsers(ctx context.Context) ([]*models.UserDTO, error) {
-	return s.userRepo.GetAllUsers(ctx)
-}
-
-// ToggleUserBlock kullanıcının engelini açar/kapatır. Kendi hesabını engelleme kontrolü burada yapılır.
-func (s *AuthService) ToggleUserBlock(ctx context.Context, actorID, targetID int64) error {
-	if actorID == targetID {
-		return ErrCannotBlockSelf
+// Logout, kullanıcının oturumunu veritabanından siler.
+func (s *AuthService) Logout(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
 	}
-	return s.userRepo.ToggleUserBlock(ctx, targetID)
+	return s.sessionRepo.DeleteSession(ctx, token)
+}
+
+// ValidateSession, oturum belirtecini doğrular.
+func (s *AuthService) ValidateSession(ctx context.Context, token string) (*models.UserDTO, error) {
+	sess, err := s.sessionRepo.GetSession(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return sess.User, nil
 }

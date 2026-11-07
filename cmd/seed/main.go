@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"car-auction-platform/internal/config"
 	"car-auction-platform/internal/db"
@@ -17,6 +18,13 @@ import (
 
 // ============================================================================
 // CMD / SEED / MAIN.GO: VERİ TABANI TOHUMLAMA (SEED) ARACI
+// ============================================================================
+// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
+// 1. Amacı: CSV dosyasındaki (data/tum_veriler.csv) araç verilerini okuyup
+//    temizleyerek açık artırma alanlarıyla birlikte veritabanına aktarmaktır.
+// 2. Role kaldırılmıştır; demo kullanıcı standart üyedir.
+// 3. Hasar Durumu: "bilinmiyor" kaldırılmıştır; varsayılan "yok" (Hasar Yok)tur.
+// 4. Açık Artırma: Başlangıç fiyatı, minimum artış ve bitiş süresi atanır.
 // ============================================================================
 
 func main() {
@@ -38,11 +46,11 @@ func main() {
 	}
 	defer database.Close()
 
-	// Demo kullanıcısını hazırla
+	// Demo kullanıcısını hazırla (role kaldırıldı)
 	var defaultUserID int64
 	err = database.QueryRow(`
-		INSERT INTO users (email, password_hash, role, is_blocked)
-		VALUES ('demo@aracihale.com', '$2a$10$DEMOPASSWORDHASHFORTESTINGPURPOSESONLY000', 'user', FALSE)
+		INSERT INTO users (email, password_hash, is_blocked)
+		VALUES ('demo@aracihale.com', '$2a$10$DEMOPASSWORDHASHFORTESTINGPURPOSESONLY000', FALSE)
 		ON CONFLICT (LOWER(email)) DO UPDATE SET updated_at = NOW()
 		RETURNING id;
 	`).Scan(&defaultUserID)
@@ -86,13 +94,12 @@ func main() {
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO listings (
-			user_id, brand, model, year, mileage, fuel_type, transmission, city, description, estimated_price, damage_status, status
-		) 
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active'
-		WHERE NOT EXISTS (
-			SELECT 1 FROM listings 
-			WHERE user_id = $1 AND brand = $2 AND model = $3 AND year = $4 AND mileage = $5 AND city = $8 AND description = $9
-		);
+			user_id, brand, model, year, mileage, fuel_type, transmission, city, description,
+			estimated_price, damage_status, status, starting_price, min_increment, end_time, current_bid
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9,
+			$10, $11, 'active', $12, $13, $14, 0
+		)
 	`)
 	if err != nil {
 		log.Fatalf("❌ Insert ifadesi hazırlanamadı: %v", err)
@@ -133,7 +140,7 @@ func main() {
 		lpgStr := getVal("lpg")
 		title := getVal("baslik")
 
-		// 1. Veri Kalitesi Kuralı: Temel verisi eksik satırlar uydurulmaz, atlanır!
+		// 1. Veri Kalitesi Kuralı
 		year, err := strconv.Atoi(yearStr)
 		if err != nil || year < 1970 || year > 2030 {
 			skippedCount++
@@ -152,47 +159,62 @@ func main() {
 			continue
 		}
 
-		// 2. LPG entegrasyonu
-		if strings.EqualFold(lpgStr, "true") && strings.EqualFold(fuel, "benzin") {
-			fuel = "Benzin & LPG"
-		} else if fuel == "" {
-			fuel = "Bilinmiyor"
+		// 2. Yakıt Tipi Normalizasyonu
+		fuelLower := strings.ToLower(fuel)
+		switch {
+		case strings.Contains(fuelLower, "benzin") && (strings.EqualFold(lpgStr, "true") || strings.Contains(fuelLower, "lpg")):
+			fuel = "lpg"
+		case strings.Contains(fuelLower, "dizel"):
+			fuel = "dizel"
+		case strings.Contains(fuelLower, "lpg"):
+			fuel = "lpg"
+		case strings.Contains(fuelLower, "hibrit") || strings.Contains(fuelLower, "hybrid"):
+			fuel = "hibrit"
+		case strings.Contains(fuelLower, "elektrik"):
+			fuel = "elektrik"
+		default:
+			fuel = "benzin"
 		}
 
-		// 3. Vites Bilgisi: Uydurma "Otomatik" yerine başlık analizi veya "Bilinmiyor"
+		// 3. Vites Bilgisi Normalizasyonu
 		lowerTitle := strings.ToLower(title)
-		transmission := "Bilinmiyor"
+		transmission := "manuel"
 		if strings.Contains(lowerTitle, "otomatik") || strings.Contains(lowerTitle, "dsg") || strings.Contains(lowerTitle, "s-tronic") || strings.Contains(lowerTitle, "tiptronic") {
-			transmission = "Otomatik"
-		} else if strings.Contains(lowerTitle, "manuel") || strings.Contains(lowerTitle, "düz vites") {
-			transmission = "Manuel"
+			transmission = "otomatik"
 		}
 
-		// 4. Hasar Durumu Değerlendirmesi: "Bilinmeyen hasar yok sayılmayacak"
+		// 4. Hasar Durumu: "bilinmiyor" kaldırıldı -> varsayılan "yok"
 		boyasiz := getVal("boyasiz")
 		degisensiz := getVal("degisensiz")
 		tramersiz := getVal("tramersiz")
 
-		var damageDetails []string
-		if strings.EqualFold(boyasiz, "evet") {
-			damageDetails = append(damageDetails, "Boyasız")
-		}
-		if strings.EqualFold(degisensiz, "evet") {
-			damageDetails = append(damageDetails, "Değişensiz")
-		}
-		if strings.EqualFold(tramersiz, "evet") {
-			damageDetails = append(damageDetails, "Tramersiz")
-		}
-
-		damage := "bilinmiyor"
-		if len(damageDetails) > 0 {
-			damage = strings.Join(damageDetails, ", ")
+		damage := "yok"
+		if strings.EqualFold(boyasiz, "evet") && strings.EqualFold(degisensiz, "evet") && strings.EqualFold(tramersiz, "evet") {
+			damage = "yok"
+		} else if strings.EqualFold(tramersiz, "evet") {
+			damage = "tramersiz"
+		} else if strings.EqualFold(boyasiz, "hayir") {
+			damage = "boyali"
+		} else if strings.EqualFold(degisensiz, "hayir") {
+			damage = "degisen"
 		}
 
 		var estimatedPrice sql.NullFloat64
+		startingPrice := 100000.0
 		if priceFloat, err := strconv.ParseFloat(fiyatStr, 64); err == nil && priceFloat > 0 {
 			estimatedPrice = sql.NullFloat64{Float64: priceFloat, Valid: true}
+			startingPrice = priceFloat * 0.85 // Başlangıç fiyatı tahmini değerin %85'i
 		}
+
+		minIncrement := 2500.0
+		if startingPrice > 500000 {
+			minIncrement = 5000.0
+		}
+		if startingPrice > 1000000 {
+			minIncrement = 10000.0
+		}
+
+		endTime := time.Now().Add(time.Duration(3+importedCount%10) * 24 * time.Hour)
 
 		res, err := stmt.Exec(
 			defaultUserID,
@@ -206,6 +228,9 @@ func main() {
 			title,
 			estimatedPrice,
 			damage,
+			startingPrice,
+			minIncrement,
+			endTime,
 		)
 		if err != nil {
 			log.Fatalf("❌ Kritik SQL hatası (satır aktarılamadı): %v", err)
@@ -221,5 +246,5 @@ func main() {
 		log.Fatalf("❌ Veritabanına onaylanamadı (Commit hatası): %v", err)
 	}
 
-	log.Printf("🎉 Toplam %d yeni araç başarıyla içe aktarıldı (Atlanan/Hatalı satır sayısı: %d).", importedCount, skippedCount)
+	log.Printf("🎉 Toplam %d yeni açık artırma aracı başarıyla içe aktarıldı (Atlanan/Hatalı satır sayısı: %d).", importedCount, skippedCount)
 }

@@ -9,6 +9,7 @@ import (
 	"car-auction-platform/internal/repository"
 )
 
+// TestBuildListingFilter_TableDriven, filtre sorgu kurucusunun doğru SQL ürettiğini test eder.
 func TestBuildListingFilter_TableDriven(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -85,7 +86,7 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			expectedArgs: []interface{}{"dizel"},
 		},
 		{
-			name: "Hasar durumu filtresi",
+			name: "Hasar durumu filtresi (boyali)",
 			filter: models.ListingFilter{
 				DamageStatus: models.DamagePainted,
 			},
@@ -94,6 +95,17 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 				"l.damage_status = $1",
 			},
 			expectedArgs: []interface{}{"boyali"},
+		},
+		{
+			name: "Hasar durumu filtresi (yok - Hasarsız)",
+			filter: models.ListingFilter{
+				DamageStatus: models.DamageNone,
+			},
+			expectedWhereSub: []string{
+				"WHERE l.status = 'active'",
+				"l.damage_status = $1",
+			},
+			expectedArgs: []interface{}{"yok"},
 		},
 		{
 			name: "Maksimum Kilometre filtresi",
@@ -107,7 +119,17 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			expectedArgs: []interface{}{120000},
 		},
 		{
-			name: "Tüm filtrelerin kombinasyonu (parametre indeks sıralaması $1..$8)",
+			name: "Bitmiş ilanlar filtresi",
+			filter: models.ListingFilter{
+				Status: "ended",
+			},
+			expectedWhereSub: []string{
+				"WHERE l.status = 'ended'",
+			},
+			expectedArgs: []interface{}(nil),
+		},
+		{
+			name: "Tüm filtrelerin kombinasyonu",
 			filter: models.ListingFilter{
 				Brand:        "Toyota",
 				Model:        "Corolla",
@@ -115,7 +137,7 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 				YearMax:      2024,
 				City:         "İstanbul",
 				FuelType:     "hibrit",
-				DamageStatus: models.DamageUnknown,
+				DamageStatus: models.DamagePainted,
 				MaxMileage:   50000,
 			},
 			expectedWhereSub: []string{
@@ -136,12 +158,12 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 				2024,
 				"%istanbul%", // normalizeSearch Türkçe İ -> i
 				"hibrit",
-				"bilinmiyor",
+				"boyali",
 				50000,
 			},
 		},
 		{
-			name: "SQL Injection denemesi parametrelere aktarılmalı, sorgu metnine yapıştırılmamalı",
+			name: "SQL Injection parametrelere aktarılmalı, sorgu metnine yapıştırılmamalı",
 			filter: models.ListingFilter{
 				Brand: "'; DROP TABLE listings; --",
 			},
@@ -161,21 +183,18 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			where, args := repository.BuildListingFilter(tt.filter)
 
-			// 1. Beklenen WHERE alt ifadeleri içeriyor mu?
 			for _, sub := range tt.expectedWhereSub {
 				if !strings.Contains(where, sub) {
 					t.Errorf("WHERE ifadesi '%s' içermiyor.\nGelen WHERE: %s", sub, where)
 				}
 			}
 
-			// 2. SQL injection raw string kontrolü
 			for _, raw := range tt.mustNotContainRaw {
 				if strings.Contains(where, raw) {
 					t.Errorf("WHERE cümlesinde ham zararlı SQL bulundu: %s", raw)
 				}
 			}
 
-			// 3. Argüman sayısı ve değerleri doğru mu?
 			if len(args) != len(tt.expectedArgs) {
 				t.Fatalf("Argüman sayısı uyuşmuyor: beklenen %d (%v), gelen %d (%v)",
 					len(tt.expectedArgs), tt.expectedArgs, len(args), args)

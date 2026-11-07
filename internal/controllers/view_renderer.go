@@ -1,5 +1,19 @@
 package controllers
 
+// ============================================================================
+// ADIM 8.1: VIEW RENDERER (HTML ŞABLON VE GÖRSELLEŞTİRME YÖNETİMİ)
+// ============================================================================
+// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
+// 1. Template Inheritance (Şablon Mirası):
+//    Her sayfa için baştan HTML yazılmaz. 'web/views/layout.html' ana iskelettir.
+// 2. Otomatik XSS Koruması (HTML Escaping):
+//    Go'nun 'html/template' paketi girdi güvenliğini otomatik sağlar.
+// 3. Custom Funcs (Özel Fonksiyonlar):
+//    formatPrice, timeRemaining, isExpired gibi fonksiyonlar şablonlarda kullanılır.
+// 4. Role ve Admin Kaldırıldı:
+//    ViewData içindeki IsAdmin kaldırılmıştır; tüm kullanıcılar standart üyedir.
+// ============================================================================
+
 import (
 	"fmt"
 	"html/template"
@@ -8,15 +22,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"car-auction-platform/internal/middlewares"
 	"car-auction-platform/internal/models"
 )
-
-// ============================================================================
-// MVC V - VIEW VE C - CONTROLLER ENTEGRASYONU
-// ============================================================================
 
 // ViewData, controller'dan view şablonuna aktarılan veri nesnesidir.
 type ViewData struct {
@@ -24,7 +35,6 @@ type ViewData struct {
 	ActiveNav       string
 	User            *models.UserDTO
 	IsAuthenticated bool
-	IsAdmin         bool
 	Error           string
 	Success         string
 	Data            interface{}
@@ -34,14 +44,12 @@ type ViewData struct {
 func NewViewData(r *http.Request, title, activeNav string) ViewData {
 	user := middlewares.GetUserFromContext(r.Context())
 	isAuth := user != nil
-	isAdmin := user != nil && user.Role == models.RoleAdmin
 
 	return ViewData{
 		Title:           title,
 		ActiveNav:       activeNav,
 		User:            user,
 		IsAuthenticated: isAuth,
-		IsAdmin:         isAdmin,
 	}
 }
 
@@ -81,6 +89,45 @@ func LoadView(viewFileName string) (*template.Template, error) {
 	funcMap := template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			return t.Format("02.01.2006 15:04")
+		},
+		"formatPrice": func(val interface{}) string {
+			var f float64
+			switch v := val.(type) {
+			case float64:
+				f = v
+			case *float64:
+				if v == nil {
+					return "0"
+				}
+				f = *v
+			case int:
+				f = float64(v)
+			case int64:
+				f = float64(v)
+			default:
+				return "0"
+			}
+			return formatMoney(f)
+		},
+		"timeRemaining": func(t time.Time) string {
+			now := time.Now()
+			if now.After(t) {
+				return "Sona Erdi"
+			}
+			diff := t.Sub(now)
+			days := int(diff.Hours()) / 24
+			hours := int(diff.Hours()) % 24
+			mins := int(diff.Minutes()) % 60
+			if days > 0 {
+				return fmt.Sprintf("%d gün %d saat", days, hours)
+			}
+			if hours > 0 {
+				return fmt.Sprintf("%d saat %d dk", hours, mins)
+			}
+			return fmt.Sprintf("%d dakika", mins)
+		},
+		"isExpired": func(t time.Time) bool {
+			return time.Now().After(t)
 		},
 		"add": func(a, b int) int {
 			return a + b
@@ -147,13 +194,24 @@ func LoadView(viewFileName string) (*template.Template, error) {
 	return template.New("layout.html").Funcs(funcMap).ParseFiles(layoutPath, viewPath)
 }
 
+func formatMoney(f float64) string {
+	intPart := int64(f)
+	s := fmt.Sprintf("%d", intPart)
+	var result []string
+	for len(s) > 3 {
+		result = append([]string{s[len(s)-3:]}, result...)
+		s = s[:len(s)-3]
+	}
+	if len(s) > 0 {
+		result = append([]string{s}, result...)
+	}
+	return strings.Join(result, ".")
+}
+
 // RenderView, HTTP durum kodunu ve HTML başlıklarını doğru sırada yazar; template hatasını loglar.
 func RenderView(w http.ResponseWriter, statusCode int, tpl *template.Template, data ViewData) {
-	// 1. Önce Header ayarlanmalıdır
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// 2. Ardından HTTP durum kodu basılmalıdır
 	w.WriteHeader(statusCode)
-	// 3. En son şablon gövdesi yazılmalıdır
 	if err := tpl.ExecuteTemplate(w, "layout.html", data); err != nil {
 		log.Printf("❌ Şablon render hatası (%s): %v", data.Title, err)
 	}

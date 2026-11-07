@@ -19,7 +19,7 @@ Projemizde iki adet bağımsız çalıştırılabilir program bulunmaktadır:
      * **Repository:** Veritabanı sorguları (`internal/repository/`)
      * **Service:** İş kuralları, şifreleme ve JWT oturum yönetimi (`internal/services/`)
      * **Controller:** İstek karşılama ve View yönlendirme (`internal/controllers/`)
-  4. Web sayfalarını (`/`, `/login`, `/register`, `/dashboard`, `/admin`) ve REST API rotalarını (`/api/auth/*`, `/healthz`) dinlemeye başlar.
+  4. Web sayfalarını (`/`, `/login`, `/register`, `/dashboard`, `/listings`) ve REST API rotalarını (`/api/auth/*`, `/healthz`) dinlemeye başlar.
   5. Statik dosyaları (CSS, JS) sunar (`/static/*`).
   6. Kullanıcıları karşılayan `http://localhost:8080` adresini yayına alır.
 * **Nasıl Çalıştırılır?**

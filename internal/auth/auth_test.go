@@ -2,11 +2,9 @@ package auth
 
 import (
 	"testing"
-	"time"
-
-	"car-auction-platform/internal/models"
 )
 
+// TestHashAndCheckPassword, bcrypt ile şifre özetleme ve doğrulamayı test eder.
 func TestHashAndCheckPassword(t *testing.T) {
 	password := "Secret123!"
 
@@ -28,6 +26,7 @@ func TestHashAndCheckPassword(t *testing.T) {
 	}
 }
 
+// TestPasswordLengthLimits, şifre uzunluk kısıtlarını test eder.
 func TestPasswordLengthLimits(t *testing.T) {
 	_, err := HashPassword("12345")
 	if err != ErrPasswordTooShort {
@@ -44,6 +43,7 @@ func TestPasswordLengthLimits(t *testing.T) {
 	}
 }
 
+// TestNormalizeEmail, e-posta normalizasyonunu test eder.
 func TestNormalizeEmail(t *testing.T) {
 	email := "  Admin.User@OtoIhale.COM  "
 	normalized := NormalizeEmail(email)
@@ -52,44 +52,22 @@ func TestNormalizeEmail(t *testing.T) {
 	}
 }
 
-func TestJWTGenerateAndValidate(t *testing.T) {
-	secretKey := "test-secret-key-12345678901234567890"
-	user := &models.User{
-		ID:    42,
-		Email: "jwt.user@otoihale.com",
-		Role:  models.RoleAdmin,
-	}
-
-	tokenStr, expiresAt, err := GenerateJWT(user, secretKey, 1*time.Hour)
+// TestGenerateSessionToken, session token üretimini test eder.
+func TestGenerateSessionToken(t *testing.T) {
+	token1, err := GenerateSessionToken()
 	if err != nil {
-		t.Fatalf("JWT üretilemedi: %v", err)
+		t.Fatalf("GenerateSessionToken hatası: %v", err)
+	}
+	if len(token1) != 64 {
+		t.Errorf("Token uzunluğu 64 karakter olmalı (hex 32 byte), alınan: %d", len(token1))
 	}
 
-	if tokenStr == "" {
-		t.Fatal("JWT boş dönemez")
-	}
-
-	if expiresAt.Before(time.Now()) {
-		t.Error("Son geçerlilik tarihi geçmişte olamaz")
-	}
-
-	// Doğrulama
-	claims, err := ValidateJWT(tokenStr, secretKey)
+	// İki farklı token üretildiklerinde farklı olmalıdır
+	token2, err := GenerateSessionToken()
 	if err != nil {
-		t.Fatalf("JWT doğrulanamadı: %v", err)
+		t.Fatalf("GenerateSessionToken hatası: %v", err)
 	}
-
-	if claims.UserID != user.ID || claims.Email != user.Email || claims.Role != models.RoleAdmin {
-		t.Errorf("JWT claims uyuşmuyor: %+v", claims)
-	}
-
-	if !claims.IsAdmin() {
-		t.Error("Admin kullanıcının IsAdmin() fonksiyonu true dönmeliydi")
-	}
-
-	// Yanlış anahtarla doğrulama denemesi (Başarısız olmalı)
-	_, err = ValidateJWT(tokenStr, "yanlis-gizli-anahtar-1234567890123456")
-	if err == nil {
-		t.Error("Yanlış gizli anahtarla JWT doğrulanamamalıydı")
+	if token1 == token2 {
+		t.Error("İki farklı session token aynı olamaz (randomlık testi)")
 	}
 }

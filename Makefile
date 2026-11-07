@@ -7,7 +7,8 @@ help:
 	@echo "  make down     - PostgreSQL docker konteynerini durdurur"
 	@echo "  make restart  - PostgreSQL konteynerini yeniden başlatır"
 	@echo "  make logs     - PostgreSQL konteyner loglarını gösterir"
-	@echo "  make run      - Go sunucusunu başlatır (migration'lar otomatik çalışır)"
+	@echo "  make run      - Go web sunucusunu başlatır (migration'lar otomatik çalışır)"
+	@echo "  make worker   - Açık artırma arka plan worker mikroservisini başlatır"
 	@echo "  make psql     - PostgreSQL terminaline bağlanır"
 	@echo "  make seed     - CSV dosyasındaki araç verilerini veritabanına aktarır"
 	@echo "  make tidy     - Go mod bağımlılıklarını günceller"
@@ -34,6 +35,9 @@ tidy:
 
 run:
 	go run cmd/server/main.go
+
+worker:
+	go run cmd/auction-worker/main.go
 
 seed:
 	go run cmd/seed/main.go -limit 100

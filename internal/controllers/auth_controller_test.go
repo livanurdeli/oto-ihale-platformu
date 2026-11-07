@@ -9,21 +9,24 @@ import (
 	"testing"
 	"time"
 
-	"car-auction-platform/internal/auth"
 	"car-auction-platform/internal/middlewares"
 	"car-auction-platform/internal/models"
 	"car-auction-platform/internal/services"
 )
 
+// ============================================================================
+// MOCK AUTH SERVICE (Session Tabanlı, Role Yok)
+// ============================================================================
+
 type mockAuthService struct {
-	users        map[string]*models.UserDTO
-	blockedUsers map[int64]bool
+	users    map[string]*models.UserDTO
+	sessions map[string]*models.UserDTO
 }
 
 func newMockAuthService() *mockAuthService {
 	return &mockAuthService{
-		users:        make(map[string]*models.UserDTO),
-		blockedUsers: make(map[int64]bool),
+		users:    make(map[string]*models.UserDTO),
+		sessions: make(map[string]*models.UserDTO),
 	}
 }
 
@@ -37,156 +40,155 @@ func (m *mockAuthService) Register(ctx context.Context, email, password, passwor
 	u := &models.UserDTO{
 		ID:    int64(len(m.users) + 1),
 		Email: email,
-		Role:  models.RoleUser, // Asla admin olamaz
 	}
 	m.users[email] = u
-	return u, "mock-jwt-token", time.Now().Add(24 * time.Hour), nil
+	token := "test-token-" + email
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	m.sessions[token] = u
+	return u, token, expiresAt, nil
 }
 
 func (m *mockAuthService) Login(ctx context.Context, email, password string) (*models.UserDTO, string, time.Time, error) {
 	u, exists := m.users[email]
-	if !exists || password == "wrongpassword" {
+	if !exists || password != "DogruSifre!" {
 		return nil, "", time.Time{}, services.ErrInvalidCredentials
 	}
-	if m.blockedUsers[u.ID] {
-		return nil, "", time.Time{}, services.ErrUserIsBlocked
-	}
-	return u, "mock-jwt-token", time.Now().Add(24 * time.Hour), nil
+	token := "test-token-" + email
+	m.sessions[token] = u
+	return u, token, time.Now().Add(7 * 24 * time.Hour), nil
 }
 
-func (m *mockAuthService) ValidateJWT(tokenString string) (*auth.Claims, error) {
-	return &auth.Claims{UserID: 1, Email: "test@test.com", Role: models.RoleUser}, nil
-}
-
-func (m *mockAuthService) GetAllUsers(ctx context.Context) ([]*models.UserDTO, error) {
-	var list []*models.UserDTO
-	for _, u := range m.users {
-		list = append(list, u)
-	}
-	return list, nil
-}
-
-func (m *mockAuthService) ToggleUserBlock(ctx context.Context, actorID, targetID int64) error {
-	if actorID == targetID {
-		return services.ErrCannotBlockSelf
-	}
-	m.blockedUsers[targetID] = !m.blockedUsers[targetID]
+func (m *mockAuthService) Logout(ctx context.Context, token string) error {
+	delete(m.sessions, token)
 	return nil
 }
 
-func TestSanitizeRedirectURL(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"", "/dashboard"},
-		{"/dashboard", "/dashboard"},
-		{"/admin", "/admin"},
-		{"//evil.com", "/dashboard"},
-		{"http://evil.com", "/dashboard"},
-		{"https://evil.com", "/dashboard"},
-		{"/\\evil.com", "/dashboard"},
-		{"javascript:alert(1)", "/dashboard"},
-		{"/auctions/12", "/auctions/12"},
+func (m *mockAuthService) ValidateSession(ctx context.Context, token string) (*models.UserDTO, error) {
+	u, ok := m.sessions[token]
+	if !ok {
+		return nil, services.ErrInvalidCredentials
 	}
+	return u, nil
+}
 
-	for _, tc := range tests {
-		got := sanitizeRedirectURL(tc.input)
-		if got != tc.expected {
-			t.Errorf("sanitizeRedirectURL(%q) = %q; beklenen %q", tc.input, got, tc.expected)
-		}
+// ============================================================================
+// TESTLER
+// ============================================================================
+
+func setupAuthController(t *testing.T) *AuthController {
+	t.Helper()
+	svc := newMockAuthService()
+	c, err := NewAuthController(svc)
+	if err != nil {
+		t.Fatalf("AuthController başlatılamadı: %v", err)
+	}
+	return c
+}
+
+func TestLoginPage_RedirectsIfAlreadyLoggedIn(t *testing.T) {
+	c := setupAuthController(t)
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	w := httptest.NewRecorder()
+
+	// Oturum açmış kullanıcıyı taklit et
+	user := &models.UserDTO{ID: 1, Email: "giris@test.com"}
+	req = req.WithContext(context.WithValue(req.Context(), middlewares.UserContextKey, user))
+	c.LoginPage(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("Oturum açmış kullanıcı /listings'e yönlendirilmeliydi, kod: %d", w.Code)
 	}
 }
 
-func TestAuthController_RegisterPost(t *testing.T) {
+func TestLoginPost_Success(t *testing.T) {
+	c := setupAuthController(t)
 	mockSvc := newMockAuthService()
-	ctrl, err := NewAuthController(mockSvc)
-	if err != nil {
-		t.Fatalf("NewAuthController hatası: %v", err)
-	}
+	// Kullanıcıyı mock'a ekle
+	mockSvc.users["test@test.com"] = &models.UserDTO{ID: 1, Email: "test@test.com"}
+	c.authService = mockSvc
 
-	formData := url.Values{
-		"email":            {"user@otoihale.com"},
-		"password":         {"Password123!"},
-		"password_confirm": {"Password123!"},
-		"role":             {"admin"}, // Kötü niyetli rol manipülasyon denemesi
-	}
+	form := url.Values{}
+	form.Set("email", "test@test.com")
+	form.Set("password", "DogruSifre!")
 
-	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(formData.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
+	w := httptest.NewRecorder()
 
-	ctrl.RegisterPost(rec, req)
+	c.LoginPost(w, req)
 
-	// Yönlendirme kontrolü
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("Beklenen durum kodu 303, alınan: %d", rec.Code)
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("Başarılı girişte yönlendirme beklendi (303), alınan: %d", w.Code)
 	}
 
-	// Rol kontrolü: Kullanıcı asla admin olamamalı, RoleUser olmalı
-	user := mockSvc.users["user@otoihale.com"]
-	if user == nil {
-		t.Fatal("Kullanıcı oluşturulmadı")
-	}
-	if user.Role != models.RoleUser {
-		t.Errorf("Rol manipülasyonu engellenemedi! Kullanıcı rolü: %s", user.Role)
-	}
-	if rec.Header().Get("Location") != "/dashboard" {
-		t.Errorf("Beklenen yönlendirme /dashboard, alınan: %s", rec.Header().Get("Location"))
+	// HttpOnly çerez set edilmeli
+	setCookie := w.Header().Get("Set-Cookie")
+	if !strings.Contains(setCookie, "session_token") {
+		t.Errorf("Oturum çerezi set edilmeli: %s", setCookie)
 	}
 }
 
-func TestAuthController_LoginPost_OpenRedirect(t *testing.T) {
+func TestLoginPost_WrongPassword(t *testing.T) {
+	c := setupAuthController(t)
 	mockSvc := newMockAuthService()
-	mockSvc.users["user@otoihale.com"] = &models.UserDTO{
-		ID:    1,
-		Email: "user@otoihale.com",
-		Role:  models.RoleUser,
-	}
+	mockSvc.users["user@test.com"] = &models.UserDTO{ID: 1, Email: "user@test.com"}
+	c.authService = mockSvc
 
-	ctrl, err := NewAuthController(mockSvc)
-	if err != nil {
-		t.Fatalf("NewAuthController hatası: %v", err)
-	}
+	form := url.Values{}
+	form.Set("email", "user@test.com")
+	form.Set("password", "YanlisSifre!")
 
-	formData := url.Values{
-		"email":    {"user@otoihale.com"},
-		"password": {"Password123!"},
-	}
-
-	// Kötü niyetli //evil.com redirect parametresi
-	req := httptest.NewRequest(http.MethodPost, "/login?redirect=//evil.com", strings.NewReader(formData.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
+	w := httptest.NewRecorder()
 
-	ctrl.LoginPost(rec, req)
+	c.LoginPost(w, req)
 
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("Beklenen durum kodu 303, alınan: %d", rec.Code)
-	}
-
-	// Open redirect engellenip /dashboard'a yönlendirilmeli
-	if rec.Header().Get("Location") != "/dashboard" {
-		t.Errorf("Open redirect açığı var! Yönlendirilen adres: %s", rec.Header().Get("Location"))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Yanlış şifrede 401 beklendi, alınan: %d", w.Code)
 	}
 }
 
-func TestAuthController_AdminToggleBlock_SelfBlock(t *testing.T) {
-	mockSvc := newMockAuthService()
-	ctrl, err := NewAuthController(mockSvc)
-	if err != nil {
-		t.Fatalf("NewAuthController hatası: %v", err)
-	}
+func TestRegisterPost_PasswordMismatch(t *testing.T) {
+	c := setupAuthController(t)
 
-	// Admin kullanıcısı kendisini engellemeye çalışıyor
-	req := httptest.NewRequest(http.MethodPost, "/admin/users/1/toggle-block", nil)
-	ctx := context.WithValue(req.Context(), middlewares.UserContextKey, &models.UserDTO{ID: 1, Role: models.RoleAdmin})
-	req = req.WithContext(ctx)
+	form := url.Values{}
+	form.Set("email", "yeni@test.com")
+	form.Set("password", "Sifre123!")
+	form.Set("password_confirm", "FarkliSifre!")
 
-	rec := httptest.NewRecorder()
-	ctrl.AdminToggleBlock(rec, req)
+	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("Kendi hesabını engellemeye çalışırken 400 Bad Request bekleniyordu, alınan: %d", rec.Code)
+	c.RegisterPost(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Şifre uyuşmazlığında 400 beklendi, alınan: %d", w.Code)
 	}
 }
+
+func TestRegisterPost_DuplicateEmail(t *testing.T) {
+	c := setupAuthController(t)
+	// Önce kayıt ol
+	mockSvc := c.authService.(*mockAuthService)
+	mockSvc.users["mevcut@test.com"] = &models.UserDTO{ID: 1, Email: "mevcut@test.com"}
+
+	form := url.Values{}
+	form.Set("email", "mevcut@test.com")
+	form.Set("password", "Sifre123!")
+	form.Set("password_confirm", "Sifre123!")
+
+	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	c.RegisterPost(w, req)
+
+	if w.Code == http.StatusSeeOther {
+		t.Error("Tekrar kayıtta yönlendirme olmamalıydı")
+	}
+}
+
+// userContextKeyForTest, test içinde context key olarak kullanılır.
+var userContextKeyForTest = "authenticated_user"

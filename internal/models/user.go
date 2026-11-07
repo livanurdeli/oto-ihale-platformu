@@ -3,47 +3,30 @@ package models
 import "time"
 
 // ============================================================================
-// KULLANICI MODELİ (USER STRUCT) & ROLLER
+// ADIM 3.1: DOMAIN ENTITY & DTO - KULLANICI MODELİ (USER STRUCT)
+// ============================================================================
+// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
+// 1. Role ve Admin Kaldırıldı: Sistemdeki tüm kullanıcılar eşit haklara sahip
+//    standart üyelerdir. İlanları yalnızca ilan sahibi düzenleyebilir ve silebilir.
+// 2. User vs UserDTO:
+//    - 'User' struct'ı veritabanındaki şifre özetini (PasswordHash) taşır.
+//    - 'UserDTO' ise şifre özetini içermez; View ve API'lere güvenle aktarılır.
 // ============================================================================
 
-// Role, sistemdeki yetki seviyelerini güvenli ve tipli olarak tanımlar (SOLID - OCP).
-type Role string
-
-const (
-	RoleUser  Role = "user"  // Standart Kullanıcı
-	RoleAdmin Role = "admin" // Yönetici
-)
-
-func (r Role) String() string {
-	return string(r)
-}
-
-func (r Role) IsValid() bool {
-	return r == RoleUser || r == RoleAdmin
-}
-
-// User yapısı (struct):
-// PostgreSQL veritabanımızdaki 'users' tablosunun Go dilindeki karşılığıdır.
+// User yapısı: PostgreSQL 'users' tablosunun Go karşılığıdır.
 type User struct {
 	ID           int64     `json:"id"`
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"` // Asla JSON veya istemciye sızdırılmaz
-	Role         Role      `json:"role"`
 	IsBlocked    bool      `json:"is_blocked"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// IsAdmin fonksiyonu kullanıcının yönetici olup olmadığını güvenle kontrol eder.
-func (u *User) IsAdmin() bool {
-	return u != nil && u.Role == RoleAdmin
-}
-
-// UserDTO, View veya dış API'lere aktarılırken PasswordHash alanını tamamen dışarıda tutan güvenli modeldir.
+// UserDTO, dış katmanlara aktarılan güvenli modeldir.
 type UserDTO struct {
 	ID        int64     `json:"id"`
 	Email     string    `json:"email"`
-	Role      Role      `json:"role"`
 	IsBlocked bool      `json:"is_blocked"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -57,7 +40,6 @@ func (u *User) ToDTO() *UserDTO {
 	return &UserDTO{
 		ID:        u.ID,
 		Email:     u.Email,
-		Role:      u.Role,
 		IsBlocked: u.IsBlocked,
 		CreatedAt: u.CreatedAt,
 		UpdatedAt: u.UpdatedAt,
