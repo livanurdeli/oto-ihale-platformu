@@ -9,6 +9,7 @@ bin/
 # Test binary, also produced by `go test -c`
 *.test
 *.docx
+!docs/*.docx
 
 
 # Output of the go coverage tool

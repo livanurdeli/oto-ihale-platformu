@@ -421,6 +421,135 @@ func (c *ListingController) APIGetBids(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
+// HAFTA 5: CANLI AÇIK ARTIRMA VERİSİ (GET /api/listings/{id}/live)
+// ============================================================================
+// Sayfayı yenilemeden güncel teklif, geri sayım ve bildirim takibi için polling endpoint'i.
+
+func (c *ListingController) APIGetLiveListing(w http.ResponseWriter, r *http.Request) {
+	id, err := parseIDParam(r, "id")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Geçersiz ilan ID"})
+		return
+	}
+
+	listing, err := c.listingService.GetListing(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, services.ErrListingNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "İlan bulunamadı"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "İlan bilgisi alınamadı"})
+		return
+	}
+
+	actor := middlewares.GetUserFromContext(r.Context())
+
+	isActive := listing.IsActive()
+	now := time.Now()
+	remSeconds := int64(0)
+	if isActive && listing.EndTime.After(now) {
+		remSeconds = int64(listing.EndTime.Sub(now).Seconds())
+	}
+
+	var currentUserID int64
+	var currentUserEmail string
+	if actor != nil {
+		currentUserID = actor.ID
+		currentUserEmail = actor.Email
+	}
+
+	var topBidderID int64
+	var topBidderEmail string
+	hasUserBid := false
+	isUserTopBidder := false
+
+	type liveBidItem struct {
+		ID              int64   `json:"id"`
+		UserID          int64   `json:"user_id"`
+		UserEmail       string  `json:"user_email"`
+		Amount          float64 `json:"amount"`
+		AmountFormatted string  `json:"amount_formatted"`
+		CreatedAt       string  `json:"created_at"`
+		IsMine          bool    `json:"is_mine"`
+	}
+
+	bidItems := make([]liveBidItem, 0, len(listing.Bids))
+	for i, b := range listing.Bids {
+		isMine := actor != nil && b.UserID == actor.ID
+		if isMine {
+			hasUserBid = true
+		}
+		if i == 0 {
+			topBidderID = b.UserID
+			topBidderEmail = maskEmail(b.UserEmail)
+			if isMine {
+				isUserTopBidder = true
+			}
+		}
+
+		bidItems = append(bidItems, liveBidItem{
+			ID:              b.ID,
+			UserID:          b.UserID,
+			UserEmail:       maskEmail(b.UserEmail),
+			Amount:          b.Amount,
+			AmountFormatted: formatMoney(b.Amount),
+			CreatedAt:       b.CreatedAt.Format("02.01.2006 15:04"),
+			IsMine:          isMine,
+		})
+	}
+
+	canBid := actor != nil && actor.ID != listing.UserID && isActive
+	canEdit := actor != nil && actor.ID == listing.UserID
+
+	resp := map[string]interface{}{
+		"listing_id":               listing.ID,
+		"status":                   listing.Status,
+		"is_active":                isActive,
+		"current_bid":              listing.CurrentBid,
+		"current_bid_formatted":    formatMoney(listing.CurrentBid),
+		"starting_price":           listing.StartingPrice,
+		"starting_price_formatted": formatMoney(listing.StartingPrice),
+		"min_increment":            listing.MinIncrement,
+		"min_increment_formatted":  formatMoney(listing.MinIncrement),
+		"next_min_bid":             listing.NextMinBid(),
+		"next_min_bid_formatted":   formatMoney(listing.NextMinBid()),
+		"end_time":                 listing.EndTime.Format(time.RFC3339),
+		"time_remaining_seconds":   remSeconds,
+		"winner_user_id":           listing.WinnerUserID,
+		"winner_email":             maskEmail(listing.WinnerEmail),
+		"winning_bid":              listing.WinningBid,
+		"top_bidder_id":            topBidderID,
+		"top_bidder_email":         topBidderEmail,
+		"total_bids":               len(listing.Bids),
+		"can_bid":                  canBid,
+		"can_edit":                 canEdit,
+		"current_user_id":          currentUserID,
+		"current_user_email":       currentUserEmail,
+		"is_user_top_bidder":       isUserTopBidder,
+		"has_user_bid":             hasUserBid,
+		"bids":                     bidItems,
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func maskEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return email
+	}
+	name := parts[0]
+	domain := parts[1]
+	if len(name) <= 1 {
+		return name + "***@" + domain
+	}
+	return string(name[0]) + "***@" + domain
+}
+
+// ============================================================================
 // İLANLARIM (GET /my/listings)
 // ============================================================================
 

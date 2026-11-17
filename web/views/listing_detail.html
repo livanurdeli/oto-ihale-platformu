@@ -10,6 +10,9 @@
   {{$bidError := index . "BidError"}}
   {{$bidSuccess := index . "BidSuccess"}}
 
+  <!-- HAFTA 5: SİTE İÇİ CANLI BİLDİRİM TOAST KONTEYNERİ -->
+  <div id="live-toast-container"></div>
+
   <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
     <a href="/listings" class="btn btn-secondary btn-sm">‹ İlan Listesine Dön</a>
     
@@ -24,14 +27,14 @@
   </div>
 
   {{if $bidError}}
-    <div class="alert alert-error" style="margin-bottom: 1.5rem;">
+    <div id="server-bid-error" class="alert alert-error" style="margin-bottom: 1.5rem;">
       <span>⚠️</span>
       <div>{{$bidError}}</div>
     </div>
   {{end}}
 
   {{if $bidSuccess}}
-    <div class="alert alert-success" style="margin-bottom: 1.5rem;">
+    <div id="server-bid-success" class="alert alert-success" style="margin-bottom: 1.5rem;">
       <span>🎉</span>
       <div>{{$bidSuccess}}</div>
     </div>
@@ -45,13 +48,14 @@
           <h1 style="font-size: 1.8rem; font-weight: 800; color: #0f172a; margin: 0;">
             {{$listing.Brand}} {{$listing.Model}}
           </h1>
-          <div>
+          <div id="auction-status-badge-container">
             {{if $listing.IsActive}}
-              <span class="status-badge" style="background: #dcfce7; color: #166534; font-size: 0.88rem; padding: 6px 12px; border-radius: 999px;">
-                🟢 Açık Artırma Devam Ediyor
+              <span id="auction-status-badge" class="status-badge" style="background: #dcfce7; color: #166534; font-size: 0.88rem; padding: 6px 14px; border-radius: 999px; display: inline-flex; align-items: center;">
+                <span class="live-pulse-dot"></span>
+                <span>Açık Artırma Devam Ediyor</span>
               </span>
             {{else}}
-              <span class="status-badge" style="background: #fee2e2; color: #991b1b; font-size: 0.88rem; padding: 6px 12px; border-radius: 999px;">
+              <span id="auction-status-badge" class="status-badge" style="background: #fee2e2; color: #991b1b; font-size: 0.88rem; padding: 6px 14px; border-radius: 999px;">
                 🔴 Sona Erdi
               </span>
             {{end}}
@@ -96,14 +100,19 @@
         {{end}}
       </div>
 
-      <!-- HAFTA 4: TEKLİF GEÇMİŞİ LİSTESİ -->
+      <!-- HAFTA 4 & 5: CANLI TEKLİF GEÇMİŞİ LİSTESİ -->
       <div class="card" style="padding: 1.5rem;">
         <h2 style="font-size: 1.15rem; font-weight: 700; color: #0f172a; margin-bottom: 1rem; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
-          <span>📊 Teklif Geçmişi</span>
-          <span style="font-size: 0.85rem; font-weight: 500; color: #64748b;">Toplam: {{len $listing.Bids}} teklif</span>
+          <span style="display: inline-flex; align-items: center; gap: 8px;">
+            <span>📊 Teklif Geçmişi</span>
+            <span style="font-size: 0.75rem; background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 999px; font-weight: 700;">CANLI</span>
+          </span>
+          <span id="total-bids-count-label" style="font-size: 0.85rem; font-weight: 500; color: #64748b;">
+            Toplam: <strong id="total-bids-count">{{len $listing.Bids}}</strong> teklif
+          </span>
         </h2>
 
-        {{if $listing.Bids}}
+        <div id="bids-table-container" {{if not $listing.Bids}}style="display: none;"{{end}}>
           <div style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; font-size: 0.92rem;">
               <thead>
@@ -114,7 +123,7 @@
                   <th style="padding: 8px;">Zaman</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody id="bids-table-body">
                 {{range $i, $bid := $listing.Bids}}
                   <tr style="border-bottom: 1px solid #f1f5f9; {{if eq $i 0}}background: #f0fdf4; font-weight: 600;{{end}}">
                     <td style="padding: 10px 8px;">
@@ -134,13 +143,13 @@
               </tbody>
             </table>
           </div>
-        {{else}}
-          <div style="text-align: center; padding: 2rem 1rem; color: #94a3b8;">
-            <div style="font-size: 2rem; margin-bottom: 0.5rem;">🏷️</div>
-            <p>Bu araç için henüz hiç teklif verilmedi.</p>
-            <p style="font-size: 0.85rem; color: #64748b;">İlk teklifi vererek açık artırmayı başlatabilirsiniz!</p>
-          </div>
-        {{end}}
+        </div>
+
+        <div id="empty-bids-state" style="text-align: center; padding: 2rem 1rem; color: #94a3b8; {{if $listing.Bids}}display: none;{{end}}">
+          <div style="font-size: 2rem; margin-bottom: 0.5rem;">🏷️</div>
+          <p>Bu araç için henüz hiç teklif verilmedi.</p>
+          <p style="font-size: 0.85rem; color: #64748b;">İlk teklifi vererek açık artırmayı başlatabilirsiniz!</p>
+        </div>
       </div>
     </div>
 
@@ -152,17 +161,18 @@
           <span style="font-size: 0.85rem; font-weight: 700; color: #2563eb; text-transform: uppercase; letter-spacing: 0.5px;">
             Açık Artırma Durumu
           </span>
-          <span style="font-size: 0.85rem; color: #64748b;">
+          <!-- HAFTA 5: CANLI GERİ SAYIM SAYACI -->
+          <span id="live-countdown" data-endtime="{{$listing.EndTime.Format "2006-01-02T15:04:05Z07:00"}}" style="font-size: 0.90rem; font-weight: 700; color: #0f172a; background: #e2e8f0; padding: 4px 10px; border-radius: 6px;">
             ⏳ {{timeRemaining $listing.EndTime}}
           </span>
         </div>
 
         <!-- FİYAT BÖLGESİ -->
-        <div style="background: white; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; border: 1px solid #e2e8f0;">
-          <div style="font-size: 0.82rem; color: #64748b; text-transform: uppercase; font-weight: 600;">
+        <div id="price-card-box" style="background: white; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; border: 1px solid #e2e8f0; transition: all 0.3s ease;">
+          <div id="price-card-label" style="font-size: 0.82rem; color: #64748b; text-transform: uppercase; font-weight: 600;">
             {{if gt $listing.CurrentBid 0.0}}Mevcut En Yüksek Teklif{{else}}Başlangıç Taban Fiyatı{{end}}
           </div>
-          <div style="font-size: 2rem; font-weight: 900; color: #059669; margin: 4px 0;">
+          <div id="price-card-amount" style="font-size: 2rem; font-weight: 900; color: #059669; margin: 4px 0; transition: transform 0.2s ease;">
             {{if gt $listing.CurrentBid 0.0}}
               {{formatPrice $listing.CurrentBid}} TL
             {{else}}
@@ -175,26 +185,26 @@
           </div>
         </div>
 
-        <!-- KAZANAN KUTUSU (Eğer Açık Artırma Bitmişse) -->
-        {{if not $listing.IsActive}}
-          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; text-align: center;">
+        <!-- KAZANAN KUTUSU (Eğer Açık Artırma Bitmişse veya Canlı Sonlandığında) -->
+        <div id="auction-winner-box" style="{{if $listing.IsActive}}display: none;{{end}} background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; text-align: center;">
+          {{if not $listing.IsActive}}
             {{if $listing.WinnerEmail}}
               <div style="font-size: 1.5rem; margin-bottom: 4px;">🏆</div>
               <div style="font-weight: 800; color: #1e40af; font-size: 1.1rem;">Açık Artırma Kazananı</div>
-              <div style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">{{$listing.WinnerEmail}}</div>
-              <div style="color: #059669; font-weight: 800; font-size: 1.25rem;">{{formatPrice $listing.WinningBid}} TL</div>
+              <div id="winner-email-display" style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">{{$listing.WinnerEmail}}</div>
+              <div id="winner-bid-display" style="color: #059669; font-weight: 800; font-size: 1.25rem;">{{formatPrice $listing.WinningBid}} TL</div>
             {{else}}
               <div style="color: #64748b; font-size: 0.9rem;">
                 Bu açık artırma teklif verilmeden sona ermiştir.
               </div>
             {{end}}
-          </div>
-        {{end}}
+          {{end}}
+        </div>
 
         <!-- TEKLİF VERME FORMU -->
-        {{if $listing.IsActive}}
+        <div id="bidding-form-container" {{if not $listing.IsActive}}style="display: none;"{{end}}>
           {{if $canBid}}
-            <form method="POST" action="/listings/{{$listing.ID}}/bid">
+            <form id="live-bid-form" method="POST" action="/listings/{{$listing.ID}}/bid">
               <div style="margin-bottom: 1rem;">
                 <label for="bid-amount" style="display: block; font-size: 0.85rem; font-weight: 600; color: #334151; margin-bottom: 6px;">
                   Teklif Tutarı (TL) *
@@ -204,18 +214,22 @@
                          min="{{$nextMinBid}}" step="{{$listing.MinIncrement}}" value="{{$nextMinBid}}"
                          style="width: 100%; padding: 12px 14px; font-size: 1.1rem; font-weight: 700; border: 2px solid #cbd5e1; border-radius: 8px; box-sizing: border-box;">
                 </div>
-                <small style="color: #64748b; display: block; margin-top: 4px;">
-                  Verilebilecek en düşük teklif: <strong>{{formatPrice $nextMinBid}} TL</strong>
+                <small id="next-min-bid-hint" style="color: #64748b; display: block; margin-top: 4px;">
+                  Verilebilecek en düşük teklif: <strong id="next-min-bid-val">{{formatPrice $nextMinBid}} TL</strong>
                 </small>
               </div>
 
-              <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 1.05rem; font-weight: 700; border-radius: 8px; background: #059669; border-color: #059669;">
+              <button type="submit" id="submit-bid-btn" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 1.05rem; font-weight: 700; border-radius: 8px; background: #059669; border-color: #059669;">
                 🤝 Teklif Ver
               </button>
             </form>
           {{else if $canEdit}}
             <div style="background: #f1f5f9; padding: 0.75rem; border-radius: 6px; font-size: 0.85rem; color: #475569; text-align: center;">
               ℹ️ Kendi ilanınıza teklif veremezsiniz.
+            </div>
+          {{else if $.User}}
+            <div style="background: #f1f5f9; padding: 0.75rem; border-radius: 6px; font-size: 0.85rem; color: #475569; text-align: center;">
+              ℹ️ Bu ilana şu an teklif verilememektedir.
             </div>
           {{else}}
             <div style="text-align: center;">
@@ -225,7 +239,7 @@
               </a>
             </div>
           {{end}}
-        {{end}}
+        </div>
       </div>
 
       <!-- TEKNİK ÖZELLİKLER KARTI -->
@@ -289,27 +303,332 @@
     <img id="lightbox-img" src="" alt="Büyük fotoğraf" onclick="event.stopPropagation()">
   </div>
 
+  <!-- ======================================================================= -->
+  <!-- HAFTA 5: CANLI İHALE, SHORT-POLLING VE SİTE İÇİ BİLDİRİM MOTORU SCRIPTİ  -->
+  <!-- ======================================================================= -->
   <script>
+    // 1. Galeri Fonksiyonları
     function changeMainPhoto(url) {
       var mainImg = document.getElementById('main-display-photo');
-      if (mainImg) {
-        mainImg.src = url;
-      }
+      if (mainImg) { mainImg.src = url; }
     }
     function openLightbox(url) {
       var lb = document.getElementById('lightbox');
       var lbImg = document.getElementById('lightbox-img');
-      if (lb && lbImg) {
-        lbImg.src = url;
-        lb.classList.add('active');
-      }
+      if (lb && lbImg) { lbImg.src = url; lb.classList.add('active'); }
     }
     function closeLightbox() {
       var lb = document.getElementById('lightbox');
-      if (lb) {
-        lb.classList.remove('active');
-      }
+      if (lb) { lb.classList.remove('active'); }
     }
+
+    // 2. HAFTA 5: Canlı İhale & Bildirim Motoru
+    (function initLiveAuctionEngine() {
+      const listingId = {{$listing.ID}};
+      const currentUserId = {{if $.User}}{{$ .User.ID}}{{else}}0{{end}};
+      const endTimeStr = "{{$listing.EndTime.Format "2006-01-02T15:04:05Z07:00"}}";
+      const endTime = new Date(endTimeStr);
+
+      let lastSeenBid = {{$listing.CurrentBid}};
+      let lastTopBidderId = {{if $listing.Bids}}{{with index $listing.Bids 0}}{{.UserID}}{{end}}{{else}}0{{end}};
+      let hasUserBid = {{if $.User}}{{if $listing.Bids}}
+        {{$userBidded := false}}
+        {{range $listing.Bids}}
+          {{if eq .UserID $.User.ID}}{{$userBidded = true}}{{end}}
+        {{end}}
+        {{$userBidded}}
+      {{else}}false{{end}}{{else}}false{{end}};
+      let isActive = {{if $listing.IsActive}}true{{else}}false{{end}};
+      let pollTimer = null;
+      let countdownTimer = null;
+
+      // Toast Bildirimi Üretici Fonksiyon
+      function showToast(title, message, type = 'info', actionBtn = null) {
+        const container = document.getElementById('live-toast-container');
+        if (!container) return;
+
+        const toast = document.createElement('div');
+        toast.className = `live-toast live-toast-${type}`;
+
+        let icon = 'ℹ️';
+        if (type === 'outbid') icon = '⚠️';
+        if (type === 'won') icon = '🏆';
+        if (type === 'error') icon = '❌';
+
+        let actionHtml = '';
+        if (actionBtn) {
+          actionHtml = `<div style="margin-top: 8px;">
+            <button type="button" class="btn btn-sm btn-primary" onclick="${actionBtn.onClick}" style="font-size: 0.8rem; padding: 4px 10px;">
+              ${actionBtn.text}
+            </button>
+          </div>`;
+        }
+
+        toast.innerHTML = `
+          <div style="font-size: 1.3rem; line-height: 1;">${icon}</div>
+          <div style="flex: 1;">
+            <div style="font-weight: 700; margin-bottom: 2px;">${title}</div>
+            <div style="font-size: 0.88rem;">${message}</div>
+            ${actionHtml}
+          </div>
+          <button type="button" class="live-toast-close" onclick="this.parentElement.remove()">×</button>
+        `;
+
+        container.appendChild(toast);
+
+        // 8 saniye sonra otomatik kaybolsun
+        setTimeout(() => {
+          if (toast.parentElement) {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(110%)';
+            setTimeout(() => toast.remove(), 300);
+          }
+        }, 8000);
+      }
+
+      // Canlı Geri Sayım Sayacı (Her Saniye Çalışır)
+      function updateCountdown() {
+        const countdownEl = document.getElementById('live-countdown');
+        if (!countdownEl) return;
+
+        const now = new Date();
+        const diffMs = endTime - now;
+
+        if (diffMs <= 0) {
+          countdownEl.innerHTML = '🔴 Süre Doldu';
+          countdownEl.classList.remove('countdown-urgent');
+          if (isActive) {
+            isActive = false;
+            triggerAuctionEnded();
+          }
+          return;
+        }
+
+        const totalSeconds = Math.floor(diffMs / 1000);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        // Son 5 dakika acil kırmızı flaş
+        if (totalSeconds < 300) {
+          countdownEl.classList.add('countdown-urgent');
+        } else {
+          countdownEl.classList.remove('countdown-urgent');
+        }
+
+        const pad = (n) => String(n).padStart(2, '0');
+
+        if (days > 0) {
+          countdownEl.innerHTML = `⏳ ${days} gün ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+        } else {
+          countdownEl.innerHTML = `⏳ ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+        }
+      }
+
+      // Açık Artırma Süresi Bittiğinde Arayüzü Güncelle
+      function triggerAuctionEnded(winnerEmail, winningBid) {
+        isActive = false;
+        const statusBadge = document.getElementById('auction-status-badge');
+        if (statusBadge) {
+          statusBadge.style.background = '#fee2e2';
+          statusBadge.style.color = '#991b1b';
+          statusBadge.innerHTML = '🔴 Sona Erdi';
+        }
+
+        // Teklif formunu gizle
+        const formContainer = document.getElementById('bidding-form-container');
+        if (formContainer) {
+          formContainer.style.display = 'none';
+        }
+
+        // Kazanan kutusunu göster
+        const winnerBox = document.getElementById('auction-winner-box');
+        if (winnerBox) {
+          winnerBox.style.display = 'block';
+          if (winnerEmail && winningBid) {
+            winnerBox.innerHTML = `
+              <div style="font-size: 1.5rem; margin-bottom: 4px;">🏆</div>
+              <div style="font-weight: 800; color: #1e40af; font-size: 1.1rem;">Açık Artırma Kazananı</div>
+              <div style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">${winnerEmail}</div>
+              <div style="color: #059669; font-weight: 800; font-size: 1.25rem;">${winningBid} TL</div>
+            `;
+          }
+        }
+      }
+
+      // Short-Polling: Her 2.5 saniyede bir sunucudan canlı açık artırma durumunu sorgula
+      async function pollLiveAuction() {
+        try {
+          const res = await fetch(`/api/listings/${listingId}/live?_t=${Date.now()}`);
+          if (!res.ok) return;
+
+          const data = await res.json();
+
+          // 1. FİYAT DEĞİŞİMİ KONTROLÜ
+          if (data.current_bid > lastSeenBid) {
+            const priceAmountEl = document.getElementById('price-card-amount');
+            const priceBoxEl = document.getElementById('price-card-box');
+            const priceLabelEl = document.getElementById('price-card-label');
+
+            if (priceAmountEl) {
+              priceAmountEl.textContent = `${data.current_bid_formatted} TL`;
+            }
+            if (priceLabelEl) {
+              priceLabelEl.textContent = 'Mevcut En Yüksek Teklif';
+            }
+            if (priceBoxEl) {
+              priceBoxEl.classList.remove('price-flash-anim');
+              void priceBoxEl.offsetWidth; // DOM reflow
+              priceBoxEl.classList.add('price-flash-anim');
+            }
+
+            // Teklif formu input değerini ve minimumunu güncelle
+            const bidInput = document.getElementById('bid-amount');
+            const minHintVal = document.getElementById('next-min-bid-val');
+            if (bidInput) {
+              bidInput.min = data.next_min_bid;
+              if (parseFloat(bidInput.value) < data.next_min_bid) {
+                bidInput.value = data.next_min_bid;
+              }
+            }
+            if (minHintVal) {
+              minHintVal.textContent = `${data.next_min_bid_formatted} TL`;
+            }
+
+            // SİTE İÇİ BİLDİRİM SENARYOLARI
+            if (hasUserBid && currentUserId > 0) {
+              if (data.top_bidder_id !== currentUserId && lastTopBidderId === currentUserId) {
+                // KULLANICININ TEKLİFİ GEÇİLDİ!
+                showToast(
+                  'Teklifiniz Geçildi!',
+                  `Başka bir katılımcı <strong>${data.current_bid_formatted} TL</strong> teklif verdi.`,
+                  'outbid',
+                  {
+                    text: `Hemen Artır (${data.next_min_bid_formatted} TL)`,
+                    onClick: `document.getElementById('bid-amount')?.focus(); document.getElementById('bid-amount').value = ${data.next_min_bid};`
+                  }
+                );
+              } else if (data.top_bidder_id === currentUserId && lastTopBidderId !== currentUserId) {
+                // Kullanıcı yeni en yüksek teklifi verdi
+                showToast(
+                  'Lider Teklif Sizde!',
+                  `<strong>${data.current_bid_formatted} TL</strong> ile şu anki en yüksek teklif sahibi sizsiniz.`,
+                  'won'
+                );
+              }
+            }
+
+            lastSeenBid = data.current_bid;
+            lastTopBidderId = data.top_bidder_id;
+          }
+
+          // 2. TEKLİF TABLOSUNU GÜNCELLE
+          if (data.bids && data.bids.length > 0) {
+            const tableContainer = document.getElementById('bids-table-container');
+            const emptyState = document.getElementById('empty-bids-state');
+            const tableBody = document.getElementById('bids-table-body');
+            const totalCountEl = document.getElementById('total-bids-count');
+
+            if (tableContainer) tableContainer.style.display = 'block';
+            if (emptyState) emptyState.style.display = 'none';
+            if (totalCountEl) totalCountEl.textContent = data.total_bids;
+
+            if (tableBody) {
+              let rowsHtml = '';
+              data.bids.forEach((bid, index) => {
+                const isTop = index === 0;
+                const topBadge = isTop ? '🏆 En Yüksek' : (index + 1);
+                const bgStyle = isTop ? 'background: #f0fdf4; font-weight: 600;' : '';
+                const myTag = bid.is_mine ? '<span style="font-size: 0.72rem; background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; margin-left: 4px; font-weight: 700;">Siz</span>' : '';
+
+                rowsHtml += `
+                  <tr style="border-bottom: 1px solid #f1f5f9; ${bgStyle}">
+                    <td style="padding: 10px 8px;">${topBadge}</td>
+                    <td style="padding: 10px 8px; color: #334151;">${bid.user_email} ${myTag}</td>
+                    <td style="padding: 10px 8px; color: #059669; font-weight: 700;">${bid.amount_formatted} TL</td>
+                    <td style="padding: 10px 8px; color: #64748b; font-size: 0.85rem;">${bid.created_at}</td>
+                  </tr>
+                `;
+              });
+              tableBody.innerHTML = rowsHtml;
+            }
+          }
+
+          // 3. İHALE BİTİŞ KONTROLÜ
+          if (!data.is_active && isActive) {
+            triggerAuctionEnded(data.winner_email, data.winning_bid ? data.winning_bid.toLocaleString('tr-TR') : '');
+            if (data.winner_user_id === currentUserId && currentUserId > 0) {
+              showToast(
+                'TEBRİKLER! KAZANDINIZ!',
+                `Bu açık artırmayı <strong>${data.current_bid_formatted} TL</strong> teklifinizle başarıyla kazandınız!`,
+                'won'
+              );
+            } else if (hasUserBid) {
+              showToast(
+                'Açık Artırma Sona Erdi',
+                `Açık artırma tamamlandı. Kazanan teklif: ${data.current_bid_formatted} TL.`,
+                'info'
+              );
+            }
+          }
+
+        } catch (err) {
+          // Ağ hatası durumunda sessizce bir sonraki polling periyodunu bekle
+          console.warn('Live polling hatası:', err);
+        }
+      }
+
+      // AJAX ile Sayfayı Yenilemeden Teklif Verme
+      const bidForm = document.getElementById('live-bid-form');
+      if (bidForm) {
+        bidForm.addEventListener('submit', async function(e) {
+          e.preventDefault();
+          const submitBtn = document.getElementById('submit-bid-btn');
+          const bidInput = document.getElementById('bid-amount');
+          const amountVal = parseFloat(bidInput.value);
+
+          if (!amountVal || amountVal <= 0) {
+            showToast('Hata', 'Geçerli bir teklif tutarı giriniz.', 'error');
+            return;
+          }
+
+          const originalBtnText = submitBtn.innerHTML;
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '⏳ Teklif Gönderiliyor...';
+
+          try {
+            const formData = new FormData(bidForm);
+            const res = await fetch(bidForm.action, {
+              method: 'POST',
+              headers: { 'Accept': 'application/json' },
+              body: formData
+            });
+
+            const result = await res.json();
+            if (res.ok) {
+              hasUserBid = true;
+              showToast('Teklifiniz Alındı!', `Teklifiniz (${amountVal.toLocaleString('tr-TR')} TL) başarıyla işlendi.`, 'won');
+              // Anında canlı veriyi çek
+              await pollLiveAuction();
+            } else {
+              showToast('Teklif Verilemedi', result.error || 'Teklif işlenirken bir sorun oluştu.', 'error');
+              await pollLiveAuction(); // Güncel durumu tazele
+            }
+          } catch (err) {
+            showToast('Bağlantı Hatası', 'Sunucuya ulaşılamadı, lütfen tekrar deneyin.', 'error');
+          } finally {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnText;
+          }
+        });
+      }
+
+      // Sayaç ve Polling Döngülerini Başlat
+      updateCountdown();
+      countdownTimer = setInterval(updateCountdown, 1000);
+      pollTimer = setInterval(pollLiveAuction, 2500); // 2.5 saniyede bir poll
+    })();
   </script>
 
   {{end}}

@@ -155,6 +155,7 @@ func run() error {
 	// İlan Sayfaları (Herkese Açık)
 	r.Get("/listings", listingController.ListingsPage)
 	r.Get("/listings/{id:[0-9]+}", listingController.ListingDetailPage)
+	r.Get("/listings/{id:[0-9]+}/live", listingController.APIGetLiveListing)
 
 	// Korumalı Kullanıcı Sayfaları (Oturum Zorunlu)
 	r.Group(func(protected chi.Router) {
@@ -190,6 +191,7 @@ func run() error {
 	// Açık Artırma Teklif API'si
 	r.Route("/api/listings", func(api chi.Router) {
 		api.Get("/{id:[0-9]+}/bids", listingController.APIGetBids)
+		api.Get("/{id:[0-9]+}/live", listingController.APIGetLiveListing)
 
 		api.Group(func(authed chi.Router) {
 			authed.Use(middlewares.RequireAuth)
