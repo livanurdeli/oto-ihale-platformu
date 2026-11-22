@@ -3,71 +3,153 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{.Title}} - Otoİhale Platformu</title>
+  <title>{{.Title}} - BOXCARS Otoİhale</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
+<body class="boxcars-theme">
 
-  <!-- NAVBAR -->
-  <header class="navbar">
-    <a href="/" class="nav-brand">
-      <div class="brand-icon">🚗</div>
-      <div>
-        <span>Otoİhale</span>
-        <span class="brand-sub">Araç İhale & Değerleme</span>
+  <!-- BOXCARS NAVBAR -->
+  <header class="boxcars-navbar">
+    <div class="navbar-inner">
+      <a href="/" class="boxcars-brand">
+        <span class="brand-text">BOXCARS</span>
+        <span class="brand-badge">OTOİHALE</span>
+      </a>
+
+      <nav class="boxcars-nav">
+        <ul class="nav-menu">
+          <li><a href="/" class="nav-item {{if eq .ActiveNav "listings"}}active{{end}}">Ana Sayfa</a></li>
+          <li><a href="/listings" class="nav-item">Açık Artırmalar</a></li>
+          <li><a href="/listings/new" class="nav-item">Fiyat Değerleme</a></li>
+          {{if .IsAuthenticated}}
+            <li><a href="/my/bids" class="nav-item {{if eq .ActiveNav "my_bids"}}active{{end}}">Tekliflerim</a></li>
+            <li><a href="/my/listings" class="nav-item {{if eq .ActiveNav "my_listings"}}active{{end}}">İlanlarım</a></li>
+            <li><a href="/dashboard" class="nav-item {{if eq .ActiveNav "dashboard"}}active{{end}}">Kullanıcı Paneli</a></li>
+            {{if .User.IsAdmin}}
+              <li><a href="/admin/dashboard" class="nav-item nav-admin {{if eq .ActiveNav "admin"}}active{{end}}">🛡️ Yönetici</a></li>
+            {{end}}
+          {{end}}
+        </ul>
+      </nav>
+
+      <div class="boxcars-actions">
+        {{if .IsAuthenticated}}
+          <div class="user-pill">
+            <span class="user-avatar">👤</span>
+            <span class="user-email">{{.User.Email}}</span>
+          </div>
+          <form action="/logout" method="POST" style="margin: 0;">
+            <button type="submit" class="btn-boxcars-outline">Çıkış</button>
+          </form>
+        {{else}}
+          <a href="/login" class="nav-sign-in">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            Giriş Yap
+          </a>
+        {{end}}
+        <a href="/listings/new" class="btn-boxcars-white">+ İlan Ver</a>
       </div>
-    </a>
-
-    <ul class="nav-links">
-      <li><a href="/" class="nav-link {{if eq .ActiveNav "listings"}}active{{end}}">Araç İlanları</a></li>
-      {{if .IsAuthenticated}}
-        <li><a href="/my/listings" class="nav-link {{if eq .ActiveNav "my_listings"}}active{{end}}">İlanlarım</a></li>
-        <li><a href="/dashboard" class="nav-link {{if eq .ActiveNav "dashboard"}}active{{end}}">Kullanıcı Paneli</a></li>
-      {{end}}
-    </ul>
-
-    <div class="nav-auth">
-      {{if .IsAuthenticated}}
-        <div class="user-badge">
-          <span>👤 {{.User.Email}}</span>
-        </div>
-        <form action="/logout" method="POST" style="margin: 0;">
-          <button type="submit" class="btn btn-sm btn-danger">Çıkış Yap</button>
-        </form>
-      {{else}}
-        <a href="/login" class="btn btn-secondary btn-sm">Giriş Yap</a>
-        <a href="/register" class="btn btn-primary btn-sm">Kayıt Ol</a>
-      {{end}}
     </div>
   </header>
 
   <!-- CONTENT ALANI -->
-  <main class="main-container">
+  <main class="main-wrapper">
     {{if .Error}}
-      <div class="alert alert-error">
-        <span>⚠️</span>
-        <div>{{.Error}}</div>
+      <div class="boxcars-container" style="padding-top: 1.5rem;">
+        <div class="alert alert-error">
+          <span>⚠️</span>
+          <div>{{.Error}}</div>
+        </div>
       </div>
     {{end}}
     {{if .Success}}
-      <div class="alert alert-success">
-        <span>✅</span>
-        <div>{{.Success}}</div>
+      <div class="boxcars-container" style="padding-top: 1.5rem;">
+        <div class="alert alert-success">
+          <span>✅</span>
+          <div>{{.Success}}</div>
+        </div>
       </div>
     {{end}}
 
     {{template "content" .}}
   </main>
 
-  <!-- FOOTER -->
-  <footer class="footer">
-    <p>© 2026 Otoİhale - İkinci El Araç Açık Artırma ve Yapay Zekâ Değerleme Platformu</p>
-    <p style="margin-top: 6px; font-size: 0.85rem; color: #64748b;">
-      Güvenilir Araç Alım-Satımı • Şeffaf Teklif Verme • Anında Piyasa Değerlemesi
-    </p>
+  <!-- BOXCARS FOOTER -->
+  <footer class="boxcars-footer">
+    <div class="footer-top">
+      <div class="boxcars-container footer-grid">
+        <div class="footer-col brand-col">
+          <div class="boxcars-brand" style="margin-bottom: 1rem;">
+            <span class="brand-text">BOXCARS</span>
+            <span class="brand-badge">OTOİHALE</span>
+          </div>
+          <p class="footer-desc">
+            Türkiye'nin yeni nesil online araç açık artırma ve yapay zekâ destekli değerleme platformu. Şeffaf teklif verme, güvenli altyapı ve anında piyasa fiyatı tespiti.
+          </p>
+          <div class="footer-stats">
+            <div class="stat-item">
+              <span class="stat-number">11.000+</span>
+              <span class="stat-label">Piyasa Verisi</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-number">7/24</span>
+              <span class="stat-label">Canlı İhale</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4 class="footer-heading">Hızlı Bağlantılar</h4>
+          <ul class="footer-links">
+            <li><a href="/">Ana Sayfa</a></li>
+            <li><a href="/listings">Tüm Araçlar</a></li>
+            <li><a href="/listings/new">Yeni İlan Oluştur</a></li>
+            <li><a href="/my/bids">Verdiğim Teklifler</a></li>
+            <li><a href="/dashboard">Kullanıcı Paneli</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4 class="footer-heading">Popüler Markalar</h4>
+          <ul class="footer-links">
+            <li><a href="/listings?brand=BMW">BMW Açık Artırmaları</a></li>
+            <li><a href="/listings?brand=Mercedes">Mercedes-Benz</a></li>
+            <li><a href="/listings?brand=Audi">Audi</a></li>
+            <li><a href="/listings?brand=Volkswagen">Volkswagen</a></li>
+            <li><a href="/listings?brand=Toyota">Toyota</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4 class="footer-heading">Güvenlik & Teknoloji</h4>
+          <ul class="footer-links">
+            <li><a href="javascript:void(0);">Pessimistic Concurrency Kilidi</a></li>
+            <li><a href="javascript:void(0);">Yapay Zekâ Değerleme Motoru</a></li>
+            <li><a href="javascript:void(0);">NLP İlan Analizi</a></li>
+            <li><a href="javascript:void(0);">PostgreSQL & Go Mimarisi</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ALT İMZA BÖLÜMÜ (LİVANUR DELİ) -->
+    <div class="footer-bottom">
+      <div class="boxcars-container footer-bottom-inner">
+        <div class="copyright">
+          © 2026 <strong>BOXCARS • Otoİhale Platformu</strong>. Tüm hakları saklıdır.
+        </div>
+
+        <!-- KULLANICININ İSTEDİĞİ İMZA -->
+        <div class="developer-signature">
+          <span class="heart-pulse">❤️</span>
+          <span>Designed & Developed by <strong>Livanur Deli</strong></span>
+          <span class="sig-badge">Livanur Deli tarafından yapıldı</span>
+        </div>
+      </div>
+    </div>
   </footer>
 
 </body>

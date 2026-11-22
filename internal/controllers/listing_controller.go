@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -42,6 +43,7 @@ type ListingController struct {
 	detailView     *template.Template
 	formView       *template.Template
 	myListingsView *template.Template
+	myBidsView     *template.Template
 	notFoundView   *template.Template
 	forbiddenView  *template.Template
 }
@@ -62,6 +64,7 @@ func NewListingController(listingService services.ListingServiceInterface, uploa
 		{"listing_detail.html", &c.detailView},
 		{"listing_form.html", &c.formView},
 		{"my_listings.html", &c.myListingsView},
+		{"my_bids.html", &c.myBidsView},
 		{"404.html", &c.notFoundView},
 		{"403.html", &c.forbiddenView},
 	}
@@ -618,6 +621,14 @@ func parseListingForm(r *http.Request) models.ListingCreateInput {
 	minIncrement := parseFloat(r.FormValue("min_increment"), 1000)
 	durationDays := parseInt(r.FormValue("duration_days"), 3)
 
+	var estimatedPrice *float64
+	if epStr := strings.TrimSpace(r.FormValue("estimated_price")); epStr != "" {
+		ep := parseFloat(epStr, 0)
+		if ep > 0 {
+			estimatedPrice = &ep
+		}
+	}
+
 	damageStr := strings.TrimSpace(r.FormValue("damage_status"))
 	damageStatus := models.DamageStatus(damageStr)
 	// "bilinmiyor" veya geçersiz değerleri "yok" olarak düzelt
@@ -626,19 +637,56 @@ func parseListingForm(r *http.Request) models.ListingCreateInput {
 	}
 
 	return models.ListingCreateInput{
-		Brand:         strings.TrimSpace(r.FormValue("brand")),
-		Model:         strings.TrimSpace(r.FormValue("model")),
-		Year:          parseInt(r.FormValue("year"), 0),
-		Mileage:       parseInt(r.FormValue("mileage"), 0),
-		FuelType:      strings.TrimSpace(strings.ToLower(r.FormValue("fuel_type"))),
-		Transmission:  strings.TrimSpace(strings.ToLower(r.FormValue("transmission"))),
-		City:          strings.TrimSpace(r.FormValue("city")),
-		Description:   strings.TrimSpace(r.FormValue("description")),
-		DamageStatus:  damageStatus,
-		StartingPrice: startingPrice,
-		MinIncrement:  minIncrement,
-		DurationDays:  durationDays,
+		Brand:          strings.TrimSpace(r.FormValue("brand")),
+		Model:          strings.TrimSpace(r.FormValue("model")),
+		Year:           parseInt(r.FormValue("year"), 0),
+		Mileage:        parseInt(r.FormValue("mileage"), 0),
+		FuelType:       strings.TrimSpace(strings.ToLower(r.FormValue("fuel_type"))),
+		Transmission:   strings.TrimSpace(strings.ToLower(r.FormValue("transmission"))),
+		City:           strings.TrimSpace(r.FormValue("city")),
+		Description:    strings.TrimSpace(r.FormValue("description")),
+		DamageStatus:   damageStatus,
+		StartingPrice:  startingPrice,
+		MinIncrement:   minIncrement,
+		DurationDays:   durationDays,
+		EstimatedPrice: estimatedPrice,
 	}
+}
+
+// APIEstimatePrice, kullanıcı form doldururken araç bilgilerine göre piyasa fiyat tahmini döner (JSON).
+func (c *ListingController) APIEstimatePrice(w http.ResponseWriter, r *http.Request) {
+	brand := strings.TrimSpace(r.FormValue("brand"))
+	model := strings.TrimSpace(r.FormValue("model"))
+	year := parseInt(r.FormValue("year"), time.Now().Year())
+	mileage := parseInt(r.FormValue("mileage"), 0)
+	fuelType := strings.TrimSpace(r.FormValue("fuel_type"))
+	transmission := strings.TrimSpace(r.FormValue("transmission"))
+	damageStatus := models.DamageStatus(strings.TrimSpace(r.FormValue("damage_status")))
+	if !damageStatus.IsValid() {
+		damageStatus = models.DamageNone
+	}
+
+	input := models.ListingCreateInput{
+		Brand:        brand,
+		Model:        model,
+		Year:         year,
+		Mileage:      mileage,
+		FuelType:     fuelType,
+		Transmission: transmission,
+		DamageStatus: damageStatus,
+	}
+
+	estimated := services.EstimateMarketPrice(input)
+	// Önerilen açık artırma başlangıç fiyatı: Piyasa değerinin ~%80'i
+	recStarting := math.Round((estimated*0.80)/5000.0) * 5000.0
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":              true,
+		"estimated_price":      estimated,
+		"formatted_price":      formatMoney(estimated) + " TL",
+		"recommended_starting": recStarting,
+		"formatted_starting":   formatMoney(recStarting) + " TL",
+	})
 }
 
 func listingFormData(r *http.Request, input models.ListingCreateInput) map[string]interface{} {
@@ -690,4 +738,27 @@ func UploadsAbsPath(uploadsDir string) string {
 		return uploadsDir
 	}
 	return abs
+}
+
+// MyBidsPage, oturum açmış kullanıcının verdiği teklifleri listeler.
+func (c *ListingController) MyBidsPage(w http.ResponseWriter, r *http.Request) {
+	actor := middlewares.GetUserFromContext(r.Context())
+	if actor == nil {
+		http.Redirect(w, r, "/login?redirect=/my/bids", http.StatusSeeOther)
+		return
+	}
+
+	bids, err := c.listingService.GetUserBids(r.Context(), actor.ID)
+	if err != nil {
+		data := NewViewData(r, "Verdiğim Teklifler", "my_bids")
+		data.Error = "Teklifleriniz yüklenirken hata oluştu."
+		RenderView(w, http.StatusInternalServerError, c.myBidsView, data)
+		return
+	}
+
+	data := NewViewData(r, "Verdiğim Teklifler", "my_bids")
+	data.Data = map[string]interface{}{
+		"Bids": bids,
+	}
+	RenderView(w, http.StatusOK, c.myBidsView, data)
 }

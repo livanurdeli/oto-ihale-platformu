@@ -183,6 +183,17 @@
             <span>Min. Artış: <strong>{{formatPrice $listing.MinIncrement}} TL</strong></span>
             <span>Bitiş: <strong>{{formatDate $listing.EndTime}}</strong></span>
           </div>
+
+          {{if hasPositivePrice $listing.EstimatedPrice}}
+          <div style="margin-top: 10px; padding: 10px 12px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 0.82rem; font-weight: 600; color: #166534; display: flex; align-items: center; gap: 4px;">
+              <span>💡</span> Piyasa Fiyat Tahmini:
+            </span>
+            <strong style="font-size: 1rem; color: #15803d; font-weight: 800;">
+              {{formatPrice $listing.EstimatedPrice}} TL
+            </strong>
+          </div>
+          {{end}}
         </div>
 
         <!-- KAZANAN KUTUSU (Eğer Açık Artırma Bitmişse veya Canlı Sonlandığında) -->
@@ -211,7 +222,7 @@
                 </label>
                 <div style="position: relative;">
                   <input type="number" id="bid-amount" name="amount" required
-                         min="{{$nextMinBid}}" step="{{$listing.MinIncrement}}" value="{{$nextMinBid}}"
+                         min="{{formatInputPrice $nextMinBid}}" step="{{formatInputPrice $listing.MinIncrement}}" value="{{formatInputPrice $nextMinBid}}"
                          style="width: 100%; padding: 12px 14px; font-size: 1.1rem; font-weight: 700; border: 2px solid #cbd5e1; border-radius: 8px; box-sizing: border-box;">
                 </div>
                 <small id="next-min-bid-hint" style="color: #64748b; display: block; margin-top: 4px;">
@@ -487,9 +498,10 @@
             const bidInput = document.getElementById('bid-amount');
             const minHintVal = document.getElementById('next-min-bid-val');
             if (bidInput) {
-              bidInput.min = data.next_min_bid;
-              if (parseFloat(bidInput.value) < data.next_min_bid) {
-                bidInput.value = data.next_min_bid;
+              const roundedMin = Math.round(data.next_min_bid);
+              bidInput.min = roundedMin;
+              if (parseFloat(bidInput.value) < roundedMin) {
+                bidInput.value = roundedMin;
               }
             }
             if (minHintVal) {
@@ -506,7 +518,7 @@
                   'outbid',
                   {
                     text: `Hemen Artır (${data.next_min_bid_formatted} TL)`,
-                    onClick: `document.getElementById('bid-amount')?.focus(); document.getElementById('bid-amount').value = ${data.next_min_bid};`
+                    onClick: `document.getElementById('bid-amount')?.focus(); document.getElementById('bid-amount').value = Math.round(${data.next_min_bid});`
                   }
                 );
               } else if (data.top_bidder_id === currentUserId && lastTopBidderId !== currentUserId) {
@@ -586,12 +598,21 @@
           e.preventDefault();
           const submitBtn = document.getElementById('submit-bid-btn');
           const bidInput = document.getElementById('bid-amount');
-          const amountVal = parseFloat(bidInput.value);
+          const amountVal = Math.round(parseFloat(bidInput.value));
+          const minVal   = Math.round(parseFloat(bidInput.min) || 0);
 
           if (!amountVal || amountVal <= 0) {
             showToast('Hata', 'Geçerli bir teklif tutarı giriniz.', 'error');
             return;
           }
+          if (amountVal < minVal) {
+            showToast('Hata', `En az ${minVal.toLocaleString('tr-TR')} TL teklif vermelisiniz.`, 'error');
+            bidInput.value = minVal;
+            return;
+          }
+
+          // input değerini tam sayıya zorla (float precision sorununu önler)
+          bidInput.value = amountVal;
 
           const originalBtnText = submitBtn.innerHTML;
           submitBtn.disabled = true;

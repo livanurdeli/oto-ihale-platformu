@@ -186,6 +186,10 @@ func (m *mockListingRepo) GetBidsByListingID(ctx context.Context, listingID int6
 	return m.bids[listingID], nil
 }
 
+func (m *mockListingRepo) GetBidsByUserID(ctx context.Context, userID int64) ([]*models.UserBidDTO, error) {
+	return nil, nil
+}
+
 func (m *mockListingRepo) CloseExpiredAuctions(ctx context.Context) (int, error) {
 	count := 0
 	for _, l := range m.listings {

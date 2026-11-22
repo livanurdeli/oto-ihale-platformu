@@ -80,6 +80,10 @@ func (m *mockListingService) GetBids(ctx context.Context, listingID int64) ([]mo
 	return m.bids[listingID], nil
 }
 
+func (m *mockListingService) GetUserBids(ctx context.Context, userID int64) ([]*models.UserBidDTO, error) {
+	return nil, nil
+}
+
 func TestAPIGetLiveListing_Success(t *testing.T) {
 	mockSvc := newMockListingService()
 	endTime := time.Now().Add(2 * time.Hour)

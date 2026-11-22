@@ -82,11 +82,13 @@ func run() error {
 	// Session Repository (JWT yerine stateful session)
 	sessionRepo := repository.NewSessionRepository(database.DB)
 
-	// Development ortamında demo hesapları oluştur
+	// Development ortamında demo ve yönetici (admin) hesapları oluştur
 	if cfg.ServerEnv == "development" {
 		demoHash, _ := auth.HashPassword("Demo123!")
-		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "demo@aracihale.com", demoHash)
-		log.Println("✅ [Development] Demo hesabı kontrol edildi (demo@aracihale.com / Demo123!)")
+		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "demo@aracihale.com", demoHash, "user")
+		adminHash, _ := auth.HashPassword("Admin123!")
+		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "admin@aracihale.com", adminHash, "admin")
+		log.Println("✅ [Development] Demo (demo@aracihale.com) ve Admin (admin@aracihale.com / Admin123!) hesapları kontrol edildi.")
 	}
 
 	// Auth Service: JWT yerine Session tabanlı
@@ -112,13 +114,27 @@ func run() error {
 		return fmt.Errorf("ListingController başlatılamadı: %w", err)
 	}
 
-	// Hafta 4: Açık Artırma Arka Plan Çalışanı
-	// Her 10 saniyede bir süresi dolan ilanları kontrol ederek kazananı belirler
-	ctx, cancelWorker := context.WithCancel(context.Background())
-	defer cancelWorker()
-	auctionWorker := services.NewAuctionWorker(listingService, 10*time.Second)
-	auctionWorker.Start(ctx)
-	log.Println("⏱️  Açık Artırma Worker başlatıldı.")
+	// Admin Controller
+	adminController, err := controllers.NewAdminController(authService, listingService)
+	if err != nil {
+		return fmt.Errorf("AdminController başlatılamadı: %w", err)
+	}
+
+	// Süresi dolan oturumları periyodik temizleme görevi (Her 1 saatte bir)
+	ctxSessionClean, cancelSessionClean := context.WithCancel(context.Background())
+	defer cancelSessionClean()
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctxSessionClean.Done():
+				return
+			case <-ticker.C:
+				_ = sessionRepo.DeleteExpiredSessions(context.Background())
+			}
+		}
+	}()
 
 	// 5. HTTP Router ve Middleware Zinciri
 	r := chi.NewRouter()
@@ -166,12 +182,20 @@ func run() error {
 		protected.Get("/listings/new", listingController.NewListingPage)
 		protected.Post("/listings", listingController.CreateListingPost)
 		protected.Get("/my/listings", listingController.MyListingsPage)
+		protected.Get("/my/bids", listingController.MyBidsPage)
 		protected.Get("/listings/{id:[0-9]+}/edit", listingController.EditListingPage)
 		protected.Post("/listings/{id:[0-9]+}/edit", listingController.EditListingPost)
 		protected.Post("/listings/{id:[0-9]+}/delete", listingController.DeleteListingPost)
 
 		// Hafta 4: Açık Artırma - Teklif Ver
 		protected.Post("/listings/{id:[0-9]+}/bid", listingController.PlaceBidPost)
+	})
+
+	// Yönetici Paneli (Yalnızca Admin)
+	r.Group(func(admin chi.Router) {
+		admin.Use(middlewares.RequireAdmin)
+		admin.Get("/admin/dashboard", adminController.AdminDashboard)
+		admin.Post("/admin/users/{id:[0-9]+}/toggle-block", adminController.ToggleBlockUser)
 	})
 
 	// ----------------------------------------------------------------
@@ -188,10 +212,11 @@ func run() error {
 		})
 	})
 
-	// Açık Artırma Teklif API'si
+	// Açık Artırma Teklif & Piyasa Değerleme API'si
 	r.Route("/api/listings", func(api chi.Router) {
 		api.Get("/{id:[0-9]+}/bids", listingController.APIGetBids)
 		api.Get("/{id:[0-9]+}/live", listingController.APIGetLiveListing)
+		api.HandleFunc("/estimate-price", listingController.APIEstimatePrice)
 
 		api.Group(func(authed chi.Router) {
 			authed.Use(middlewares.RequireAuth)
@@ -229,8 +254,8 @@ func run() error {
 	case sig := <-shutdownChan:
 		log.Printf("🛑 Kapanma sinyali alındı (%v). Sunucu güvenli biçimde durduruluyor...", sig)
 
-		// Worker'ı durdur
-		cancelWorker()
+		// Oturum temizleme görevini durdur
+		cancelSessionClean()
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

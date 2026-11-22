@@ -71,6 +71,24 @@ func (m *mockAuthService) ValidateSession(ctx context.Context, token string) (*m
 	return u, nil
 }
 
+func (m *mockAuthService) ListUsers(ctx context.Context) ([]*models.UserDTO, error) {
+	var list []*models.UserDTO
+	for _, u := range m.users {
+		list = append(list, u)
+	}
+	return list, nil
+}
+
+func (m *mockAuthService) SetUserBlocked(ctx context.Context, id int64, blocked bool) error {
+	for _, u := range m.users {
+		if u.ID == id {
+			u.IsBlocked = blocked
+			return nil
+		}
+	}
+	return nil
+}
+
 // ============================================================================
 // TESTLER
 // ============================================================================

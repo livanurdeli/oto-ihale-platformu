@@ -1,213 +1,440 @@
 {{define "content"}}
-<div style="padding: 1.5rem 0;">
 
-  <!-- SAYFA BAŞLIĞI -->
-  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.75rem; flex-wrap:wrap; gap:1rem;">
-    <div>
-      <h1 style="font-size:1.8rem; font-weight:800; color:#0f172a;">🚗 Canlı Araç Açık Artırmaları</h1>
-      <p style="color:#64748b; margin-top:4px; font-size:0.9rem;">
-        {{with .Data}}{{with index . "Page"}}Toplam {{.Total}} aktif ihale listeleniyor.{{end}}{{end}}
-      </p>
+<!-- ========================================================================= -->
+<!-- BOXCARS HERO SECTION (DAĞ VE LÜKS ARAÇ ARKA PLANI)                       -->
+<!-- ========================================================================= -->
+<section class="boxcars-hero">
+  <div class="hero-overlay"></div>
+  <div class="hero-content">
+    <div class="hero-subtitle-pill">Türkiye'nin En Güvenilir Canlı Araç İhale & Değerleme Platformu</div>
+    <h1 class="hero-title">Find Your Perfect Car</h1>
+    <p class="hero-tagline">İkinci el ve sıfır araçlarda yapay zekâ destekli fiyat tahmini ve şeffaf açık artırma</p>
+
+    <!-- TAB BUTONLARI -->
+    <div class="hero-tabs">
+      <a href="/listings" class="hero-tab active">Tümü</a>
+      <a href="/listings?status=active" class="hero-tab">Canlı İhaleler</a>
+      <a href="/listings?year_min=2020" class="hero-tab">Yeni Nesil (2020+)</a>
     </div>
-    {{if .IsAuthenticated}}
-      <a href="/listings/new" class="btn btn-primary" id="btn-new-listing">+ Yeni Açık Artırma Başlat</a>
-    {{else}}
-      <a href="/login?redirect=/listings/new" class="btn btn-secondary" id="btn-login-to-list">Giriş yap → İlan ver</a>
-    {{end}}
-  </div>
 
-  <!-- POPÜLER MARKALAR -->
-  {{with .Data}}
-  {{$filter := index . "Filter"}}
-  {{$currentYear := index . "CurrentYear"}}
-  {{$damageStatuses := index . "DamageStatuses"}}
-  {{$damageLabel := index . "DamageLabel"}}
+    <!-- YÜZEN ARAMA FORMU (FLOATING SEARCH BAR) -->
+    {{with .Data}}
+    {{$filter := index . "Filter"}}
+    {{$currentYear := index . "CurrentYear"}}
+    {{$damageStatuses := index . "DamageStatuses"}}
+    {{$damageLabel := index . "DamageLabel"}}
 
-  <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.25rem;">
-    <a href="/listings" class="btn btn-sm {{if eq $filter.Brand ""}}btn-primary{{else}}btn-secondary{{end}}">Tümü</a>
-    <a href="/listings?brand=Renault" class="btn btn-sm {{if eq $filter.Brand "Renault"}}btn-primary{{else}}btn-secondary{{end}}">Renault</a>
-    <a href="/listings?brand=Fiat" class="btn btn-sm {{if eq $filter.Brand "Fiat"}}btn-primary{{else}}btn-secondary{{end}}">Fiat</a>
-    <a href="/listings?brand=Volkswagen" class="btn btn-sm {{if eq $filter.Brand "Volkswagen"}}btn-primary{{else}}btn-secondary{{end}}">Volkswagen</a>
-    <a href="/listings?brand=Ford" class="btn btn-sm {{if eq $filter.Brand "Ford"}}btn-primary{{else}}btn-secondary{{end}}">Ford</a>
-    <a href="/listings?brand=Toyota" class="btn btn-sm {{if eq $filter.Brand "Toyota"}}btn-primary{{else}}btn-secondary{{end}}">Toyota</a>
-    <a href="/listings?brand=BMW" class="btn btn-sm {{if eq $filter.Brand "BMW"}}btn-primary{{else}}btn-secondary{{end}}">BMW</a>
-    <a href="/listings?brand=Mercedes" class="btn btn-sm {{if eq $filter.Brand "Mercedes"}}btn-primary{{else}}btn-secondary{{end}}">Mercedes</a>
-    <a href="/listings?brand=Audi" class="btn btn-sm {{if eq $filter.Brand "Audi"}}btn-primary{{else}}btn-secondary{{end}}">Audi</a>
-    <a href="/listings?brand=Hyundai" class="btn btn-sm {{if eq $filter.Brand "Hyundai"}}btn-primary{{else}}btn-secondary{{end}}">Hyundai</a>
-  </div>
+    <div class="hero-search-card">
+      <form method="GET" action="/listings" class="hero-search-form">
+        <div class="search-input-group">
+          <label class="search-label">Marka</label>
+          <input type="text" name="brand" placeholder="Tüm Markalar (ör. BMW)" value="{{$filter.Brand}}" class="search-input">
+        </div>
 
-  <!-- FİLTRE PANELİ -->
-  <div class="filter-panel">
-    <form method="GET" action="/listings" id="filter-form">
-      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem;">
-        <strong style="font-size:0.95rem; color:#374151;">🔍 Filtrele</strong>
-        <a href="/listings" class="btn btn-secondary btn-sm">Filtreleri Temizle</a>
+        <div class="search-divider"></div>
+
+        <div class="search-input-group">
+          <label class="search-label">Model</label>
+          <input type="text" name="model" placeholder="Tüm Modeller (ör. 320i)" value="{{$filter.Model}}" class="search-input">
+        </div>
+
+        <div class="search-divider"></div>
+
+        <div class="search-input-group">
+          <label class="search-label">Şehir / Konum</label>
+          <input type="text" name="city" placeholder="Tüm Şehirler (ör. İstanbul)" value="{{$filter.City}}" class="search-input">
+        </div>
+
+        <button type="submit" class="btn-hero-search">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          Araç Ara
+        </button>
+      </form>
+    </div>
+
+    <!-- KASA TİPİ PİLLLERİ -->
+    <div class="hero-categories">
+      <span class="cat-label">Gövde Tipi Seçin:</span>
+      <div class="cat-pills">
+        <a href="/listings?fuel_type=benzin" class="cat-pill">
+          <span class="cat-icon">🚗</span> Sedan
+        </a>
+        <a href="/listings?max_mileage=100000" class="cat-pill">
+          <span class="cat-icon">🚙</span> SUV
+        </a>
+        <a href="/listings?fuel_type=dizel" class="cat-pill">
+          <span class="cat-icon">🏎️</span> Hatchback
+        </a>
+        <a href="/listings?year_min=2021" class="cat-pill">
+          <span class="cat-icon">🚘</span> Coupe
+        </a>
+        <a href="/listings?fuel_type=hibrit" class="cat-pill">
+          <span class="cat-icon">⚡</span> Hibrit / Elektrik
+        </a>
       </div>
-      <div class="filter-grid">
-        <div>
-          <label class="filter-label" for="f-brand">Marka</label>
-          <input type="text" id="f-brand" name="brand" placeholder="ör. Toyota" value="{{$filter.Brand}}"
-                 style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-        </div>
-        <div>
-          <label class="filter-label" for="f-model">Model</label>
-          <input type="text" id="f-model" name="model" placeholder="ör. Corolla" value="{{$filter.Model}}"
-                 style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-        </div>
-        <div>
-          <label class="filter-label" for="f-city">Şehir</label>
-          <input type="text" id="f-city" name="city" placeholder="ör. İstanbul" value="{{$filter.City}}"
-                 style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-        </div>
-        <div>
-          <label class="filter-label" for="f-year-min">Yıl (Min)</label>
-          <input type="number" id="f-year-min" name="year_min" min="1950" max="{{$currentYear}}"
-                 placeholder="1950" value="{{if $filter.YearMin}}{{$filter.YearMin}}{{end}}"
-                 style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-        </div>
-        <div>
-          <label class="filter-label" for="f-year-max">Yıl (Max)</label>
-          <input type="number" id="f-year-max" name="year_max" min="1950" max="{{$currentYear}}"
-                 placeholder="{{$currentYear}}" value="{{if $filter.YearMax}}{{$filter.YearMax}}{{end}}"
-                 style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-        </div>
-        <div>
-          <label class="filter-label" for="f-max-mileage">Max Km</label>
-          <input type="number" id="f-max-mileage" name="max_mileage" min="0" placeholder="ör. 150000"
-                 value="{{if $filter.MaxMileage}}{{$filter.MaxMileage}}{{end}}"
-                 style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-        </div>
-        <div>
-          <label class="filter-label" for="f-fuel">Yakıt Tipi</label>
-          <select id="f-fuel" name="fuel_type"
-                  style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-            <option value="">Tümü</option>
-            <option value="benzin"   {{if eq $filter.FuelType "benzin"}}selected{{end}}>Benzin</option>
-            <option value="dizel"    {{if eq $filter.FuelType "dizel"}}selected{{end}}>Dizel</option>
-            <option value="lpg"      {{if eq $filter.FuelType "lpg"}}selected{{end}}>LPG</option>
-            <option value="elektrik" {{if eq $filter.FuelType "elektrik"}}selected{{end}}>Elektrik</option>
-            <option value="hibrit"   {{if eq $filter.FuelType "hibrit"}}selected{{end}}>Hibrit</option>
-            <option value="hidrojen" {{if eq $filter.FuelType "hidrojen"}}selected{{end}}>Hidrojen</option>
-          </select>
-        </div>
-        <div>
-          <label class="filter-label" for="f-damage">Hasar Durumu</label>
-          <select id="f-damage" name="damage_status"
-                  style="width:100%; padding:0.5rem 0.75rem; border:1.5px solid #d1d5db; border-radius:6px; font-size:0.9rem;">
-            <option value="">Tümü</option>
-            {{range $damageStatuses}}
-              <option value="{{.}}" {{if eq . $filter.DamageStatus}}selected{{end}}>
-                {{index $damageLabel .}}
-              </option>
-            {{end}}
-          </select>
-        </div>
-        <div style="display:flex; align-items:flex-end;">
-          <button type="submit" class="btn btn-primary" style="width:100%;">Filtrele</button>
-        </div>
-      </div>
-    </form>
+    </div>
   </div>
+</section>
 
-  <!-- İLAN KARTLARI -->
-  {{$page := index . "Page"}}
-  {{if $page.Items}}
-    <div class="listing-grid">
-      {{range $page.Items}}
-      <div class="listing-card">
-        <a href="/listings/{{.ID}}" style="text-decoration:none; display:block; position:relative;">
-          <div class="listing-card-image">
-            {{if .CoverPhotoURL}}
-              <img src="{{.CoverPhotoURL}}" alt="{{.Brand}} {{.Model}} fotoğrafı" loading="lazy">
-            {{else}}
-              🚗
-            {{end}}
+<!-- ========================================================================= -->
+<!-- BEYAZ KIVRIMLI İÇERİK GEÇİŞİ (BOXCARS CURVED WHITE TRANSITION)             -->
+<!-- ========================================================================= -->
+<div class="boxcars-main-content">
+  <div class="boxcars-container">
+
+    <!-- 1. EXPLORE OUR PREMIUM BRANDS (SEÇKİN MARKALAR) -->
+    <section class="section-brands">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Explore Our Premium Brands</h2>
+          <p class="section-sub">Türkiye'nin en çok tercih edilen seçkin otomobil üreticileri</p>
+        </div>
+        <a href="/listings" class="section-link">Tüm Markalar ↗</a>
+      </div>
+
+      <div class="brand-grid">
+        <a href="/listings?brand=Audi" class="brand-card {{if eq $filter.Brand "Audi"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- AUDI SVG -->
+            <svg viewBox="0 0 100 40" class="brand-svg">
+              <circle cx="23" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="3"/>
+              <circle cx="41" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="3"/>
+              <circle cx="59" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="3"/>
+              <circle cx="77" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="3"/>
+            </svg>
           </div>
-          <div style="position: absolute; top: 10px; right: 10px;">
-            {{if .IsActive}}
-              <span style="background: rgba(16, 185, 129, 0.9); color: white; font-size: 0.75rem; font-weight: 700; padding: 4px 8px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.15);">
-                ⏳ {{timeRemaining .EndTime}}
-              </span>
-            {{else}}
-              <span style="background: rgba(239, 68, 68, 0.9); color: white; font-size: 0.75rem; font-weight: 700; padding: 4px 8px; border-radius: 6px;">
-                Sona Erdi
-              </span>
-            {{end}}
-          </div>
+          <span class="brand-name">Audi</span>
         </a>
 
-        <div class="listing-card-body">
-          <a href="/listings/{{.ID}}" class="listing-card-title" style="text-decoration:none; color:inherit;">
-            {{.Brand}} {{.Model}}
-          </a>
-          <div class="listing-card-meta">
-            <span>📅 {{.Year}}</span>
-            <span>🛣️ {{.Mileage}} km</span>
-            <span>⛽ {{.FuelType}}</span>
-            <span>🏙️ {{.City}}</span>
+        <a href="/listings?brand=BMW" class="brand-card {{if eq $filter.Brand "BMW"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- BMW SVG -->
+            <svg viewBox="0 0 40 40" class="brand-svg">
+              <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="2.5"/>
+              <circle cx="20" cy="20" r="13" fill="#2563eb"/>
+              <path d="M20 7 A13 13 0 0 1 33 20 L20 20 Z" fill="#ffffff"/>
+              <path d="M7 20 A13 13 0 0 1 20 33 L20 20 Z" fill="#ffffff"/>
+            </svg>
           </div>
+          <span class="brand-name">BMW</span>
+        </a>
 
-          <!-- HAFTA 4: GÜNCEL FİYAT / TEKLİF -->
-          <div style="margin-top: 10px; padding: 8px 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #f1f5f9;">
-            <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 600;">
-              {{if gt .CurrentBid 0.0}}Mevcut Teklif{{else}}Başlangıç Fiyatı{{end}}
+        <a href="/listings?brand=Mercedes" class="brand-card {{if eq $filter.Brand "Mercedes"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- MERCEDES SVG -->
+            <svg viewBox="0 0 40 40" class="brand-svg">
+              <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="2.5"/>
+              <line x1="20" y1="2" x2="20" y2="20" stroke="currentColor" stroke-width="2.5"/>
+              <line x1="20" y1="20" x2="5" y2="28" stroke="currentColor" stroke-width="2.5"/>
+              <line x1="20" y1="20" x2="35" y2="28" stroke="currentColor" stroke-width="2.5"/>
+            </svg>
+          </div>
+          <span class="brand-name">Mercedes-Benz</span>
+        </a>
+
+        <a href="/listings?brand=Volkswagen" class="brand-card {{if eq $filter.Brand "Volkswagen"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- VOLKSWAGEN SVG -->
+            <svg viewBox="0 0 40 40" class="brand-svg">
+              <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="2.5"/>
+              <path d="M10 13 L17 33 L20 25 L23 33 L30 13" fill="none" stroke="currentColor" stroke-width="2"/>
+              <path d="M14 13 L20 27 L26 13" fill="none" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </div>
+          <span class="brand-name">Volkswagen</span>
+        </a>
+
+        <a href="/listings?brand=Ford" class="brand-card {{if eq $filter.Brand "Ford"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- FORD SVG -->
+            <svg viewBox="0 0 50 30" class="brand-svg">
+              <ellipse cx="25" cy="15" rx="23" ry="13" fill="none" stroke="currentColor" stroke-width="2.5"/>
+              <text x="25" y="19" font-family="'Brush Script MT', cursive, sans-serif" font-size="14" font-weight="bold" fill="currentColor" text-anchor="middle">Ford</text>
+            </svg>
+          </div>
+          <span class="brand-name">Ford</span>
+        </a>
+
+        <a href="/listings?brand=Toyota" class="brand-card {{if eq $filter.Brand "Toyota"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- TOYOTA SVG -->
+            <svg viewBox="0 0 40 30" class="brand-svg">
+              <ellipse cx="20" cy="15" rx="18" ry="12" fill="none" stroke="currentColor" stroke-width="2"/>
+              <ellipse cx="20" cy="15" rx="6" ry="11" fill="none" stroke="currentColor" stroke-width="2"/>
+              <ellipse cx="20" cy="9" rx="13" ry="5" fill="none" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </div>
+          <span class="brand-name">Toyota</span>
+        </a>
+
+        <a href="/listings?brand=Peugeot" class="brand-card {{if eq $filter.Brand "Peugeot"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- PEUGEOT SVG -->
+            <svg viewBox="0 0 36 40" class="brand-svg">
+              <path d="M18 2 L32 7 L32 25 C32 33 18 38 18 38 C18 38 4 33 4 25 L4 7 Z" fill="none" stroke="currentColor" stroke-width="2.2"/>
+              <path d="M18 10 L22 17 L19 22 L23 29 L16 27 L14 20 Z" fill="currentColor"/>
+            </svg>
+          </div>
+          <span class="brand-name">Peugeot</span>
+        </a>
+
+        <a href="/listings?brand=Renault" class="brand-card {{if eq $filter.Brand "Renault"}}active{{end}}">
+          <div class="brand-logo-wrap">
+            <!-- RENAULT SVG -->
+            <svg viewBox="0 0 36 40" class="brand-svg">
+              <polygon points="18,3 32,18 18,37 4,18" fill="none" stroke="currentColor" stroke-width="3"/>
+              <polygon points="18,11 25,18 18,29 11,18" fill="none" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </div>
+          <span class="brand-name">Renault</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- DETAYLI FİLTRE PANELİ (AKORDİYON) -->
+    <details class="advanced-filter-details">
+      <summary class="advanced-filter-summary">
+        <span>⚙️ Detaylı Arama & Filtreleme (Yıl, KM, Hasar Durumu, Yakıt)</span>
+        <span class="summary-toggle-icon">▼</span>
+      </summary>
+      <div class="filter-panel-body">
+        <form method="GET" action="/listings">
+          <input type="hidden" name="brand" value="{{$filter.Brand}}">
+          <input type="hidden" name="model" value="{{$filter.Model}}">
+          <div class="filter-grid">
+            <div>
+              <label class="filter-label">Şehir</label>
+              <input type="text" name="city" placeholder="ör. İstanbul" value="{{$filter.City}}" class="filter-input">
             </div>
-            <div style="font-size: 1.25rem; font-weight: 800; color: #059669;">
-              {{if gt .CurrentBid 0.0}}
-                {{formatPrice .CurrentBid}} TL
-              {{else}}
-                {{formatPrice .StartingPrice}} TL
-              {{end}}
+            <div>
+              <label class="filter-label">Yıl (Min)</label>
+              <input type="number" name="year_min" min="1950" max="{{$currentYear}}" placeholder="1950" value="{{if $filter.YearMin}}{{$filter.YearMin}}{{end}}" class="filter-input">
+            </div>
+            <div>
+              <label class="filter-label">Yıl (Max)</label>
+              <input type="number" name="year_max" min="1950" max="{{$currentYear}}" placeholder="{{$currentYear}}" value="{{if $filter.YearMax}}{{$filter.YearMax}}{{end}}" class="filter-input">
+            </div>
+            <div>
+              <label class="filter-label">Maksimum KM</label>
+              <input type="number" name="max_mileage" min="0" placeholder="ör. 150000" value="{{if $filter.MaxMileage}}{{$filter.MaxMileage}}{{end}}" class="filter-input">
+            </div>
+            <div>
+              <label class="filter-label">Yakıt Tipi</label>
+              <select name="fuel_type" class="filter-select">
+                <option value="">Tümü</option>
+                <option value="benzin"   {{if eq $filter.FuelType "benzin"}}selected{{end}}>Benzin</option>
+                <option value="dizel"    {{if eq $filter.FuelType "dizel"}}selected{{end}}>Dizel</option>
+                <option value="lpg"      {{if eq $filter.FuelType "lpg"}}selected{{end}}>LPG</option>
+                <option value="elektrik" {{if eq $filter.FuelType "elektrik"}}selected{{end}}>Elektrik</option>
+                <option value="hibrit"   {{if eq $filter.FuelType "hibrit"}}selected{{end}}>Hibrit</option>
+              </select>
+            </div>
+            <div>
+              <label class="filter-label">Hasar Durumu</label>
+              <select name="damage_status" class="filter-select">
+                <option value="">Tümü</option>
+                {{range $damageStatuses}}
+                  <option value="{{.}}" {{if eq . $filter.DamageStatus}}selected{{end}}>
+                    {{index $damageLabel .}}
+                  </option>
+                {{end}}
+              </select>
+            </div>
+            <div style="display:flex; gap:0.5rem; align-items:flex-end;">
+              <button type="submit" class="btn btn-primary" style="flex:1;">Uygula</button>
+              <a href="/listings" class="btn btn-secondary">Temizle</a>
             </div>
           </div>
+        </form>
+      </div>
+    </details>
+
+    <!-- 2. EXPLORE ALL VEHICLES (ARAÇ LİSTESİ) -->
+    <section class="section-vehicles">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Explore All Vehicles</h2>
+          <p class="section-sub">
+            {{with index . "Page"}}Toplam <strong>{{.Total}}</strong> adet araç açık artırmada listeleniyor{{end}}
+          </p>
         </div>
-
-        <div class="listing-card-footer">
-          <span class="damage-badge damage-{{.DamageStatus}}">
-            {{index $damageLabel .DamageStatus}}
-          </span>
-          <a href="/listings/{{.ID}}" class="btn btn-secondary btn-sm">
-            {{if .IsActive}}Teklif Ver →{{else}}Sonuç →{{end}}
-          </a>
+        <div class="vehicle-sub-tabs">
+          <a href="/listings" class="sub-tab {{if eq $filter.Brand ""}}active{{end}}">Tümü</a>
+          <a href="/listings?damage_status=yok" class="sub-tab {{if eq $filter.DamageStatus "yok"}}active{{end}}">Hatasız Araçlar</a>
+          <a href="/listings?fuel_type=hibrit" class="sub-tab">Hibrit / Elektrik</a>
         </div>
       </div>
-      {{end}}
-    </div>
 
-    <!-- SAYFALAMA -->
-    {{if gt $page.TotalPages 1}}
-    {{$currentPage := $page.Page}}
-    <div class="pagination" role="navigation" aria-label="Sayfalama">
-      {{if gt $currentPage 1}}
-        <a href="?{{buildQuery $filter (sub $currentPage 1)}}" class="page-btn" id="prev-page">‹ Önceki</a>
-      {{else}}
-        <span class="page-btn disabled">‹ Önceki</span>
-      {{end}}
+      {{$page := index . "Page"}}
+      {{if $page.Items}}
+        <div class="boxcars-card-grid">
+          {{range $page.Items}}
+          <div class="boxcars-car-card">
+            <!-- RESİM VE BADGELER -->
+            <div class="car-card-media">
+              <a href="/listings/{{.ID}}" class="media-link">
+                {{if .CoverPhotoURL}}
+                  <img src="{{.CoverPhotoURL}}" alt="{{.Brand}} {{.Model}}" class="car-img" loading="lazy">
+                {{else}}
+                  <div class="car-placeholder">
+                    <span style="font-size: 3rem;">🚗</span>
+                  </div>
+                {{end}}
+              </a>
 
-      {{range pageRange 1 $page.TotalPages $currentPage}}
-        {{if eq . $currentPage}}
-          <span class="page-btn active">{{.}}</span>
-        {{else}}
-          <a href="?{{buildQuery $filter .}}" class="page-btn">{{.}}</a>
+              <!-- SÜRE BADGE'İ (SOL ÜST) -->
+              <div class="badge-stack-left">
+                {{if .IsActive}}
+                  <span class="badge-chip badge-active">
+                    ⚡ Canlı İhale
+                  </span>
+                  <span class="badge-chip badge-time">
+                    ⏳ {{timeRemaining .EndTime}}
+                  </span>
+                {{else}}
+                  <span class="badge-chip badge-ended">
+                    Sona Erdi
+                  </span>
+                {{end}}
+              </div>
+
+              <!-- HASAR DURUMU BADGE'İ (SAĞ ÜST) -->
+              <div class="badge-stack-right">
+                <span class="damage-pill damage-{{.DamageStatus}}">
+                  {{index $damageLabel .DamageStatus}}
+                </span>
+              </div>
+            </div>
+
+            <!-- KART İÇERİĞİ -->
+            <div class="car-card-info">
+              <div class="car-category-sub">{{.City}} • {{.Year}} Model</div>
+              <h3 class="car-card-title">
+                <a href="/listings/{{.ID}}">{{.Brand}} {{.Model}}</a>
+              </h3>
+
+              <!-- TEKNİK VERİLER ÇİZGİSİ -->
+              <div class="car-specs-row">
+                <div class="spec-pill">
+                  <span class="spec-ico">🛣️</span>
+                  <span>{{.Mileage}} km</span>
+                </div>
+                <div class="spec-pill">
+                  <span class="spec-ico">⛽</span>
+                  <span style="text-transform: capitalize;">{{.FuelType}}</span>
+                </div>
+                <div class="spec-pill">
+                  <span class="spec-ico">⚙️</span>
+                  <span style="text-transform: capitalize;">{{.Transmission}}</span>
+                </div>
+              </div>
+
+              <!-- FİYAT & BUTON ALT KISMI -->
+              <div class="car-card-bottom">
+                <div class="price-block">
+                  <span class="price-hint">
+                    {{if gt .CurrentBid 0.0}}Güncel En Yüksek Teklif{{else}}Başlangıç Taban Fiyatı{{end}}
+                  </span>
+                  <div class="price-value">
+                    {{if gt .CurrentBid 0.0}}
+                      {{formatPrice .CurrentBid}} TL
+                    {{else}}
+                      {{formatPrice .StartingPrice}} TL
+                    {{end}}
+                  </div>
+                </div>
+
+                <a href="/listings/{{.ID}}" class="btn-card-action">
+                  {{if .IsActive}}Teklif Ver ↗{{else}}İncele ↗{{end}}
+                </a>
+              </div>
+            </div>
+          </div>
+          {{end}}
+        </div>
+
+        <!-- SAYFALAMA -->
+        {{if gt $page.TotalPages 1}}
+        {{$currentPage := $page.Page}}
+        <div class="pagination-boxcars" role="navigation" aria-label="Sayfalama">
+          {{if gt $currentPage 1}}
+            <a href="?{{buildQuery $filter (sub $currentPage 1)}}" class="page-arrow">‹ Önceki</a>
+          {{else}}
+            <span class="page-arrow disabled">‹ Önceki</span>
+          {{end}}
+
+          {{range pageRange 1 $page.TotalPages $currentPage}}
+            {{if eq . $currentPage}}
+              <span class="page-num active">{{.}}</span>
+            {{else}}
+              <a href="?{{buildQuery $filter .}}" class="page-num">{{.}}</a>
+            {{end}}
+          {{end}}
+
+          {{if lt $currentPage $page.TotalPages}}
+            <a href="?{{buildQuery $filter (add $currentPage 1)}}" class="page-arrow">Sonraki ›</a>
+          {{else}}
+            <span class="page-arrow disabled">Sonraki ›</span>
+          {{end}}
+        </div>
         {{end}}
-      {{end}}
 
-      {{if lt $currentPage $page.TotalPages}}
-        <a href="?{{buildQuery $filter (add $currentPage 1)}}" class="page-btn" id="next-page">Sonraki ›</a>
       {{else}}
-        <span class="page-btn disabled">Sonraki ›</span>
+        <!-- BOŞ DURUM -->
+        <div class="boxcars-empty-state">
+          <div style="font-size: 3.5rem; margin-bottom: 1rem;">🔍</div>
+          <h3>Aradığınız Kriterlere Uygun Araç Bulunamadı</h3>
+          <p>Farklı bir marka, model veya şehir seçerek filtreleri sıfırlayabilirsiniz.</p>
+          <a href="/listings" class="btn btn-primary" style="margin-top: 1rem; border-radius: 999px; padding: 0.75rem 2rem;">Tüm İlanları Göster</a>
+        </div>
       {{end}}
-    </div>
-    {{end}}
+    </section>
 
-  {{else}}
-    <div style="text-align:center; padding:4rem 2rem; color:#64748b;">
-      <div style="font-size:3.5rem; margin-bottom:1rem;">🔍</div>
-      <h2 style="font-size:1.3rem; font-weight:700; color:#0f172a; margin-bottom:0.5rem;">İlan bulunamadı</h2>
-      <p style="font-size:0.95rem;">Filtrelerinizi değiştirip tekrar aramayı deneyin.</p>
-    </div>
-  {{end}}
+    <!-- 3. GET A FAIR PRICE FOR YOUR CAR (BOXCARS PROMO BANNER) -->
+    <section class="section-promo-fair-price">
+      <div class="promo-grid">
+        <!-- SOL RESİM -->
+        <div class="promo-media">
+          <img src="https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1000&q=80" alt="Aracınızı Değerinde Satın" class="promo-img">
+          <div class="promo-play-badge">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
+          </div>
+        </div>
 
-  {{end}} {{/* end with .Data */}}
+        <!-- SAĞ İÇERİK KARTI -->
+        <div class="promo-card">
+          <span class="promo-pill">Yapay Zekâ Destekli Değerleme</span>
+          <h2 class="promo-title">Get A Fair Price For Your Car • Sell To Us Today</h2>
+          <p class="promo-desc">
+            Aracınızın piyasadaki gerçek değerini öğrenin! 11.000'den fazla gerçek pazar verisi ve CatBoost yapay zekâ modeliyle anında objektif fiyat tahmini alın.
+          </p>
+
+          <ul class="promo-features">
+            <li>
+              <span class="feat-check">✓</span>
+              <span>11.000+ pazar verisiyle eğitilmiş algoritma ile saniyeler içinde ekspertiz tahmini</span>
+            </li>
+            <li>
+              <span class="feat-check">✓</span>
+              <span>Hasar, tramer, boya ve değişen parçaya göre anında değer kaybı hesaplaması</span>
+            </li>
+            <li>
+              <span class="feat-check">✓</span>
+              <span>7/24 şeffaf canlı açık artırma ile aracınızı en yüksek teklifi veren alıcıya satın</span>
+            </li>
+          </ul>
+
+          <div class="promo-cta-row">
+            <a href="/listings/new" class="btn-promo-start">
+              Hemen Fiyat Hesapla ↗
+            </a>
+            <span class="promo-cta-hint">100% Ücretsiz ve Taahhütsüz</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
 </div>
+{{end}}
 {{end}}

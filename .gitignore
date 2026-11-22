@@ -1,5 +1,7 @@
 # Binaries & Build
 bin/
+server
+auction-worker
 *.exe
 *.exe~
 *.dll

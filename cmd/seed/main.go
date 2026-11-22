@@ -60,8 +60,11 @@ func main() {
 	log.Printf("👤 İlanların atanacağı demo kullanıcı ID: %d", defaultUserID)
 
 	if *cleanFlag {
-		_, _ = database.Exec(`DELETE FROM listings WHERE user_id = $1`, defaultUserID)
-		log.Println("🧹 Demo kullanıcısına ait eski ilanlar temizlendi.")
+		if _, err := database.Exec(`DELETE FROM listings WHERE user_id = $1`, defaultUserID); err != nil {
+			log.Printf("⚠️ Eski ilanlar temizlenirken hata: %v", err)
+		} else {
+			log.Println("🧹 Demo kullanıcısına ait eski ilanlar temizlendi.")
+		}
 	}
 
 	file, err := os.Open(*filePathFlag)
@@ -183,12 +186,12 @@ func main() {
 			transmission = "otomatik"
 		}
 
-		// 4. Hasar Durumu: "bilinmiyor" kaldırıldı -> varsayılan "yok"
+		// 4. Hasar Durumu: Gerçekçi veri aktarımı (bilinmeyen durumlar 'bilinmiyor' olarak atanır)
 		boyasiz := getVal("boyasiz")
 		degisensiz := getVal("degisensiz")
 		tramersiz := getVal("tramersiz")
 
-		damage := "yok"
+		damage := "bilinmiyor"
 		if strings.EqualFold(boyasiz, "evet") && strings.EqualFold(degisensiz, "evet") && strings.EqualFold(tramersiz, "evet") {
 			damage = "yok"
 		} else if strings.EqualFold(tramersiz, "evet") {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -70,9 +71,9 @@ func (r *ListingRepository) CreateListing(ctx context.Context, tx *sql.Tx, input
 	query := `
 		INSERT INTO listings
 			(user_id, brand, model, year, mileage, fuel_type, transmission, city, description,
-			 damage_status, status, starting_price, min_increment, end_time, current_bid, created_at, updated_at)
+			 damage_status, status, starting_price, min_increment, end_time, current_bid, estimated_price, created_at, updated_at)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, 0, NOW(), NOW())
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, 0, $14, NOW(), NOW())
 		RETURNING id, user_id, brand, model, year, mileage, fuel_type, transmission, city,
 		          description, damage_status, status, engine_volume, estimated_price,
 		          starting_price, min_increment, end_time, current_bid, winner_user_id, winning_bid,
@@ -83,13 +84,13 @@ func (r *ListingRepository) CreateListing(ctx context.Context, tx *sql.Tx, input
 		row = tx.QueryRowContext(ctx, query,
 			userID, input.Brand, input.Model, input.Year, input.Mileage,
 			input.FuelType, input.Transmission, input.City, input.Description,
-			damageStatus, startingPrice, minIncrement, endTime,
+			damageStatus, startingPrice, minIncrement, endTime, input.EstimatedPrice,
 		)
 	} else {
 		row = r.db.QueryRowContext(ctx, query,
 			userID, input.Brand, input.Model, input.Year, input.Mileage,
 			input.FuelType, input.Transmission, input.City, input.Description,
-			damageStatus, startingPrice, minIncrement, endTime,
+			damageStatus, startingPrice, minIncrement, endTime, input.EstimatedPrice,
 		)
 	}
 	return scanListing(row)
@@ -361,7 +362,7 @@ func (r *ListingRepository) PlaceBid(ctx context.Context, listingID, userID int6
 	}
 
 	// 2. Kural: Süresi dolmuş mu veya aktif değil mi?
-	if status != "active" || time.Now().After(endTime) {
+	if status != "active" || !time.Now().Before(endTime) {
 		return nil, ErrAuctionEnded
 	}
 
@@ -371,15 +372,21 @@ func (r *ListingRepository) PlaceBid(ctx context.Context, listingID, userID int6
 	}
 
 	// 4. Kural: Teklif tutarı geçerli mi?
+	// Not: float64 karşılaştırmasında küçük precision hatalarını tolere etmek için
+	// math.Round ile tam sayıya yuvarlayarak karşılaştırma yapıyoruz.
+	roundedAmount := math.Round(amount)
 	if currentBid > 0 {
-		minRequired := currentBid + minIncrement
-		if amount < minRequired {
-			return nil, fmt.Errorf("%w: En az %.2f TL teklif vermelisiniz (Mevcut: %.2f TL + Min Artış: %.2f TL)", ErrBidTooLow, minRequired, currentBid, minIncrement)
+		minRequired := math.Round(currentBid + minIncrement)
+		if roundedAmount < minRequired {
+			return nil, fmt.Errorf("%w: En az %.0f TL teklif vermelisiniz (Mevcut: %.0f TL + Min Artış: %.0f TL)", ErrBidTooLow, minRequired, currentBid, minIncrement)
 		}
+		amount = roundedAmount
 	} else {
-		if amount < startingPrice {
-			return nil, fmt.Errorf("%w: Başlangıç fiyatı olan en az %.2f TL teklif vermelisiniz", ErrBidTooLow, startingPrice)
+		rounded := math.Round(startingPrice)
+		if roundedAmount < rounded {
+			return nil, fmt.Errorf("%w: Başlangıç fiyatı olan en az %.0f TL teklif vermelisiniz", ErrBidTooLow, startingPrice)
 		}
+		amount = roundedAmount
 	}
 
 	// 5. Teklifi ekle
@@ -439,20 +446,95 @@ func (r *ListingRepository) GetBidsByListingID(ctx context.Context, listingID in
 		if err != nil {
 			return nil, err
 		}
+		// Gizlilik: E-posta adresini maskele (a***@domain.com)
+		b.UserEmail = maskUserEmail(b.UserEmail)
 		bids = append(bids, b)
 	}
 	return bids, rows.Err()
 }
 
-// CloseExpiredAuctions, süresi dolmuş aktif açık artırmaları bulur,
+func maskUserEmail(email string) string {
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return email
+	}
+	name := parts[0]
+	domain := parts[1]
+	if len(name) <= 1 {
+		return name + "***@" + domain
+	}
+	return string(name[0]) + "***@" + domain
+}
+
+// GetBidsByUserID, kullanıcının katıldığı ve teklif verdiği açık artırmaları getirir.
+func (r *ListingRepository) GetBidsByUserID(ctx context.Context, userID int64) ([]*models.UserBidDTO, error) {
+	query := `
+		SELECT
+			b.id, b.listing_id, l.brand, l.model, l.year,
+			COALESCE(p.photo_url, ''),
+			b.amount, l.current_bid, l.status, l.winner_user_id,
+			l.end_time, b.created_at
+		FROM bids b
+		JOIN listings l ON b.listing_id = l.id
+		LEFT JOIN LATERAL (
+			SELECT photo_url FROM listing_photos
+			WHERE listing_id = l.id
+			ORDER BY display_order ASC, id ASC
+			LIMIT 1
+		) p ON true
+		WHERE b.user_id = $1
+		ORDER BY b.created_at DESC
+		LIMIT 50
+	`
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bids []*models.UserBidDTO
+	for rows.Next() {
+		var ub models.UserBidDTO
+		var winnerID sql.NullInt64
+		err := rows.Scan(
+			&ub.BidID, &ub.ListingID, &ub.Brand, &ub.Model, &ub.Year,
+			&ub.CoverPhotoURL, &ub.MyBid, &ub.CurrentBid, &ub.ListingStatus, &winnerID,
+			&ub.EndTime, &ub.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if winnerID.Valid {
+			ub.WinnerUserID = &winnerID.Int64
+			ub.IsWinner = winnerID.Int64 == userID
+		}
+		// En yüksek lider teklif mi?
+		ub.IsLeading = ub.MyBid >= ub.CurrentBid && ub.ListingStatus == "active"
+
+		bids = append(bids, &ub)
+	}
+
+	return bids, rows.Err()
+}
+
+// CloseExpiredAuctions, süresi dolmuş aktif açık artırmaları FOR UPDATE SKIP LOCKED ile kilitler,
 // en yüksek teklifi veren kazananı belirler ve ilan durumunu 'ended' olarak kapatır.
 func (r *ListingRepository) CloseExpiredAuctions(ctx context.Context) (int, error) {
-	// 1. Süresi dolmuş ve hala aktif olan ilan ID'lerini al
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// FOR UPDATE SKIP LOCKED ile birden fazla worker'ın aynı ilanı eşzamanlı işlemesi engellenir
 	findQuery := `
 		SELECT id FROM listings
 		WHERE status = 'active' AND end_time <= NOW()
+		ORDER BY end_time ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 100
 	`
-	rows, err := r.db.QueryContext(ctx, findQuery)
+	rows, err := tx.QueryContext(ctx, findQuery)
 	if err != nil {
 		return 0, err
 	}
@@ -465,17 +547,13 @@ func (r *ListingRepository) CloseExpiredAuctions(ctx context.Context) (int, erro
 			expiredIDs = append(expiredIDs, id)
 		}
 	}
+	rows.Close()
 
 	closedCount := 0
 	for _, id := range expiredIDs {
-		tx, err := r.db.BeginTx(ctx, nil)
-		if err != nil {
-			continue
-		}
-
 		// En yüksek teklif sahibini bul
-		var winnerUserID int64
-		var winningBid float64
+		var winnerUserID sql.NullInt64
+		var winningBid sql.NullFloat64
 		bidErr := tx.QueryRowContext(ctx, `
 			SELECT user_id, amount FROM bids
 			WHERE listing_id = $1
@@ -483,25 +561,29 @@ func (r *ListingRepository) CloseExpiredAuctions(ctx context.Context) (int, erro
 			LIMIT 1
 		`, id).Scan(&winnerUserID, &winningBid)
 
-		if bidErr == nil {
-			// Kazanan var
-			_, _ = tx.ExecContext(ctx, `
+		var execErr error
+		if bidErr == nil && winnerUserID.Valid {
+			_, execErr = tx.ExecContext(ctx, `
 				UPDATE listings
 				SET status = 'ended', winner_user_id = $1, winning_bid = $2, updated_at = NOW()
 				WHERE id = $3
-			`, winnerUserID, winningBid, id)
+			`, winnerUserID.Int64, winningBid.Float64, id)
 		} else {
-			// Hiç teklif verilmeden bitti
-			_, _ = tx.ExecContext(ctx, `
+			_, execErr = tx.ExecContext(ctx, `
 				UPDATE listings
 				SET status = 'ended', updated_at = NOW()
 				WHERE id = $1
 			`, id)
 		}
 
-		if err := tx.Commit(); err == nil {
-			closedCount++
+		if execErr != nil {
+			return closedCount, execErr
 		}
+		closedCount++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 
 	return closedCount, nil

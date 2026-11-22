@@ -69,7 +69,7 @@ Bu hafta tamamlanan temel isterler ve geliştirmeler:
 ### 2. Ortam Değişkenleri (`.env`)
 Proje kök dizininde `.env` dosyasını oluşturun:
 ```env
-PORT=8080
+SERVER_PORT=8080
 SERVER_ENV=development
 DB_HOST=localhost
 DB_PORT=5432
@@ -77,7 +77,6 @@ DB_USER=postgres
 DB_PASSWORD=postgres
 DB_NAME=car_auction_db
 DB_SSLMODE=disable
-JWT_SECRET=super-gizli-ve-guclu-bir-jwt-anahtari-32-karakter
 ```
 
 ### 3. Sunucuyu Başlatma
@@ -85,10 +84,15 @@ JWT_SECRET=super-gizli-ve-guclu-bir-jwt-anahtari-32-karakter
 # Bağımlılıkları kontrol et
 go mod tidy
 
-# Sunucuyu çalıştır (Otomatik migration'lar 001, 002, 003 uygulanır)
+# Sunucuyu çalıştır (Otomatik migration'lar 001 - 005 uygulanır)
 go run cmd/server/main.go
 ```
 Uygulama `http://localhost:8080` adresinde çalışacaktır.
+
+Açık artırma arka plan motorunu (worker) başlatmak için:
+```bash
+go run cmd/auction-worker/main.go
+```
 
 ### 4. Test İlan Verilerini Yükleme (Seed)
 ```bash

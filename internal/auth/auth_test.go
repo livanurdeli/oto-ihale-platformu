@@ -28,7 +28,7 @@ func TestHashAndCheckPassword(t *testing.T) {
 
 // TestPasswordLengthLimits, şifre uzunluk kısıtlarını test eder.
 func TestPasswordLengthLimits(t *testing.T) {
-	_, err := HashPassword("12345")
+	_, err := HashPassword("1234567")
 	if err != ErrPasswordTooShort {
 		t.Errorf("Kısa şifre için ErrPasswordTooShort bekleniyordu, alınan: %v", err)
 	}

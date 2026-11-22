@@ -22,17 +22,44 @@
       <!-- AÇIK ARTIRMA KURALLARI (HAFTA 4) -->
       <div class="form-section-title">⏱️ Açık Artırma Fiyat & Süre Ayarları</div>
 
+      <!-- AKILLI PİYASA FİYAT TAHMİNİ & TAVSİYE EDİLEN FİYAT -->
+      <div id="valuation-box" style="margin-bottom: 1.5rem; background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%); border: 1.5px solid #bfdbfe; border-radius: 12px; padding: 1.25rem; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+          <div>
+            <div style="display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: #1e40af; font-size: 0.95rem; margin-bottom: 4px;">
+              <span>💡 Akıllı Piyasa Fiyat Analizi</span>
+              <span style="font-size: 0.72rem; background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 999px; font-weight: 600;">Canlı Öneri</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 10px; margin: 6px 0;">
+              <span style="font-size: 0.85rem; color: #475569;">Tavsiye Edilen Piyasa Değeri:</span>
+              <strong id="estimated-price-display" style="font-size: 1.5rem; font-weight: 900; color: #059669;">
+                Bilgileri Giriniz
+              </strong>
+            </div>
+            <div id="rec-starting-hint" style="font-size: 0.82rem; color: #64748b; display: none;">
+              Açık artırma için tavsiye edilen başlangıç teklifi: <strong id="rec-starting-display" style="color: #2563eb;">-</strong> (Piyasa değerinin %80'i)
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button type="button" id="btn-apply-recommended" style="display: none; font-size: 0.85rem; padding: 8px 14px; border-radius: 8px; background: #2563eb; color: white; border: none; cursor: pointer; font-weight: 700; box-shadow: 0 2px 4px rgba(37,99,235,0.2);">
+              ⚡ Tavsiye Fiyatı Başlangıç Yap
+            </button>
+          </div>
+        </div>
+        <input type="hidden" id="estimated_price_hidden" name="estimated_price" value="">
+      </div>
+
       <div class="form-row">
         <div class="form-group">
           <label for="starting_price">Başlangıç Fiyatı (TL) *</label>
           <input type="number" id="starting_price" name="starting_price" required min="1000" step="500" placeholder="ör. 250000"
-                 value="{{if $isEdit}}{{$listing.StartingPrice}}{{else if $input.StartingPrice}}{{$input.StartingPrice}}{{else}}100000{{end}}">
+                 value="{{if $isEdit}}{{formatInputPrice $listing.StartingPrice}}{{else if $input.StartingPrice}}{{formatInputPrice $input.StartingPrice}}{{else}}100000{{end}}">
           <small style="color:#64748b;">Açık artırmanın başlayacağı taban teklif tutarı.</small>
         </div>
         <div class="form-group">
           <label for="min_increment">Minimum Teklif Artışı (TL) *</label>
           <input type="number" id="min_increment" name="min_increment" required min="100" step="100" placeholder="ör. 2500"
-                 value="{{if $isEdit}}{{$listing.MinIncrement}}{{else if $input.MinIncrement}}{{$input.MinIncrement}}{{else}}1000{{end}}">
+                 value="{{if $isEdit}}{{formatInputPrice $listing.MinIncrement}}{{else if $input.MinIncrement}}{{formatInputPrice $input.MinIncrement}}{{else}}1000{{end}}">
           <small style="color:#64748b;">Her yeni teklifin bir öncekinden en az ne kadar yüksek olması gerektiği.</small>
         </div>
       </div>
@@ -201,6 +228,118 @@
       }
       fileList.appendChild(ul);
     }
+    // ==========================================
+    // CANLI PİYASA FİYAT TAHMİNİ & DEĞERLEME
+    // ==========================================
+    var debounceTimer = null;
+    var currentRecStarting = 0;
+
+    function updatePriceEstimation() {
+      var brandEl = document.getElementById('brand');
+      var modelEl = document.getElementById('model');
+      var yearEl = document.getElementById('year');
+      var mileageEl = document.getElementById('mileage');
+      var fuelEl = document.getElementById('fuel_type');
+      var transEl = document.getElementById('transmission');
+      var damageEl = document.getElementById('damage_status');
+
+      if (!brandEl || !modelEl) return;
+
+      var brand = brandEl.value.trim();
+      var model = modelEl.value.trim();
+      var year = yearEl ? yearEl.value.trim() : '';
+      var mileage = mileageEl ? mileageEl.value.trim() : '';
+      var fuel = fuelEl ? fuelEl.value : '';
+      var trans = transEl ? transEl.value : '';
+      var damage = damageEl ? damageEl.value : 'yok';
+
+      var displayEl = document.getElementById('estimated-price-display');
+      var hiddenInput = document.getElementById('estimated_price_hidden');
+      var recHint = document.getElementById('rec-starting-hint');
+      var recDisplay = document.getElementById('rec-starting-display');
+      var applyBtn = document.getElementById('btn-apply-recommended');
+
+      if (!brand && !model) {
+        if (displayEl) displayEl.innerText = 'Bilgileri Giriniz';
+        if (recHint) recHint.style.display = 'none';
+        if (applyBtn) applyBtn.style.display = 'none';
+        return;
+      }
+
+      if (displayEl) displayEl.innerHTML = '<span style="color:#64748b; font-size:1.1rem;">⏳ Hesaplanıyor...</span>';
+
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function() {
+        var params = new URLSearchParams();
+        params.append('brand', brand);
+        params.append('model', model);
+        params.append('year', year);
+        params.append('mileage', mileage);
+        params.append('fuel_type', fuel);
+        params.append('transmission', trans);
+        params.append('damage_status', damage);
+
+        fetch('/api/listings/estimate-price', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data && data.success) {
+            if (displayEl) {
+              displayEl.innerText = data.formatted_price;
+              displayEl.style.color = '#059669';
+            }
+            if (hiddenInput) {
+              hiddenInput.value = data.estimated_price;
+            }
+            if (recHint && recDisplay && data.recommended_starting) {
+              currentRecStarting = data.recommended_starting;
+              recDisplay.innerText = data.formatted_starting;
+              recHint.style.display = 'block';
+            }
+            if (applyBtn) {
+              applyBtn.style.display = 'inline-block';
+            }
+          }
+        })
+        .catch(function(err) {
+          console.error('Fiyat tahmini hatası:', err);
+          if (displayEl) displayEl.innerText = 'Hesaplanamadı';
+        });
+      }, 300);
+    }
+
+    // Girdi alanlarına dinleyiciler bağla
+    ['brand', 'model', 'year', 'mileage', 'fuel_type', 'transmission', 'damage_status'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('input', updatePriceEstimation);
+        el.addEventListener('change', updatePriceEstimation);
+      }
+    });
+
+    // Sayfa ilk yüklendiğinde mevcut değerlerle çalıştır
+    document.addEventListener('DOMContentLoaded', function() {
+      updatePriceEstimation();
+
+      var applyBtn = document.getElementById('btn-apply-recommended');
+      var startingPriceInput = document.getElementById('starting_price');
+
+      if (applyBtn && startingPriceInput) {
+        applyBtn.addEventListener('click', function() {
+          if (currentRecStarting > 0) {
+            startingPriceInput.value = currentRecStarting;
+            startingPriceInput.style.transition = 'background-color 0.4s ease';
+            startingPriceInput.style.backgroundColor = '#dcfce7';
+            setTimeout(function() {
+              startingPriceInput.style.backgroundColor = '';
+            }, 800);
+          }
+        });
+      }
+    });
   </script>
 
   {{end}}

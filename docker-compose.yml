@@ -34,6 +34,7 @@ services:
         condition: service_healthy
     volumes:
       - ./uploads:/app/uploads
+      - ./web:/app/web
 
   # Mikroservis 2: Açık Artırma Arka Plan Motoru (Auction Worker Microservice)
   auction-worker:

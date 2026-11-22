@@ -58,11 +58,29 @@ func (m *mockUserRepo) GetUserStatus(ctx context.Context, id int64) (bool, error
 	return false, repository.ErrUserNotFound
 }
 
-func (m *mockUserRepo) CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash string) error {
+func (m *mockUserRepo) CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash, role string) error {
 	if _, exists := m.users[email]; !exists {
-		m.users[email] = &models.User{ID: int64(len(m.users) + 1), Email: email, PasswordHash: passwordHash}
+		m.users[email] = &models.User{ID: int64(len(m.users) + 1), Email: email, PasswordHash: passwordHash, Role: role}
 	}
 	return nil
+}
+
+func (m *mockUserRepo) ListUsers(ctx context.Context) ([]*models.UserDTO, error) {
+	var list []*models.UserDTO
+	for _, u := range m.users {
+		list = append(list, u.ToDTO())
+	}
+	return list, nil
+}
+
+func (m *mockUserRepo) SetUserBlocked(ctx context.Context, id int64, blocked bool) error {
+	for _, u := range m.users {
+		if u.ID == id {
+			u.IsBlocked = blocked
+			return nil
+		}
+	}
+	return repository.ErrUserNotFound
 }
 
 // mockSessionRepo, SessionRepositoryInterface'i taklit eder.

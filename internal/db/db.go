@@ -1,3 +1,6 @@
+// Bu dosya, PostgreSQL veritabanı bağlantısının kurulmasını, bağlantı havuzu (connection pool)
+// parametrelerinin yapılandırılmasını ve veritabanı erişim durumunun test edilmesini (ping) sağlar.
+
 package db
 
 // ============================================================================
@@ -22,31 +25,33 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL sürücüsünü (pgx) database/sql paketine kaydeder (yan etki import'u)
 )
 
+// DB, Go'nun standart sql.DB yapısını sarmalayarak genişleten veritabanı veri yapısıdır.
 type DB struct {
-	*sql.DB
+	*sql.DB // Standart sql.DB yapısını gömer (embedded struct); böylece tüm standart veritabanı metotlarına doğrudan erişilebilir
 }
 
-// Connect establishes a connection pool to PostgreSQL using the provided connection string.
+// Connect, verilen bağlantı adresini (DSN) kullanarak PostgreSQL veritabanına bir bağlantı havuzu oluşturur,
+// havuz ayarlarını yapılandırır ve bağlantının aktif olduğunu doğrular.
 func Connect(dsn string) (*DB, error) {
-	conn, err := sql.Open("pgx", dsn)
+	conn, err := sql.Open("pgx", dsn) // Veritabanı sürücüsünü yapılandırır (henüz fiziksel bağlantı açılmaz)
 	if err != nil {
 		return nil, fmt.Errorf("veritabani surucusu baslatilamadi: %w", err)
 	}
 
 	// Havuz (Pool) Ayarları
-	conn.SetMaxOpenConns(25)
-	conn.SetMaxIdleConns(10)
-	conn.SetConnMaxLifetime(15 * time.Minute)
-	conn.SetConnMaxIdleTime(5 * time.Minute)
+	conn.SetMaxOpenConns(25)                  // Aynı anda açık olabilecek azami (maksimum) bağlantı sayısı
+	conn.SetMaxIdleConns(10)                  // İşlem yapılmadığında havuzda hazır bekletilecek azami boşta bağlantı sayısı
+	conn.SetConnMaxLifetime(15 * time.Minute) // Bir bağlantının kapatılmadan önce yeniden kullanılabileceği toplam kullanım ömrü
+	conn.SetConnMaxIdleTime(5 * time.Minute)  // Boşta bekleyen bir bağlantının kapatılmadan önceki bekleme süresi
 
 	// Bağlantıyı doğrula (Ping)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // Veritabanı yanıtı için 5 saniyelik zaman aşımı (timeout) süresi tanımlar
+	defer cancel()                                                          // Fonksiyon bittiğinde zaman aşımı kaynağını temizleyerek bellek sızıntısını önler
 
-	if err := conn.PingContext(ctx); err != nil {
+	if err := conn.PingContext(ctx); err != nil { // Veritabanına test sinyali (ping) göndererek sunucuya fiilen erişilebildiğini doğrular
 		return nil, fmt.Errorf("veritabanina baglanilamadi: %w", err)
 	}
 
