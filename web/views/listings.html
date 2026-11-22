@@ -10,68 +10,101 @@
     <h1 class="hero-title">Hayalinizdeki Aracı Keşfedin</h1>
     <p class="hero-tagline">İkinci el ve sıfır araçlarda yapay zekâ destekli fiyat tahmini ve şeffaf açık artırma</p>
 
-    <!-- TAB BUTONLARI -->
-    <div class="hero-tabs">
-      <a href="/listings" class="hero-tab active">Tümü</a>
-      <a href="/listings?status=active" class="hero-tab">Canlı İhaleler</a>
-      <a href="/listings?year_min=2020" class="hero-tab">Yeni Nesil (2020+)</a>
-    </div>
-
     <!-- YÜZEN ARAMA FORMU (FLOATING SEARCH BAR) -->
     {{with .Data}}
     {{$filter := index . "Filter"}}
     {{$currentYear := index . "CurrentYear"}}
     {{$damageStatuses := index . "DamageStatuses"}}
     {{$damageLabel := index . "DamageLabel"}}
+    {{$isHome := index . "IsHome"}}
 
     <div class="hero-search-card">
-      <form method="GET" action="/listings" class="hero-search-form">
-        <div class="search-input-group">
-          <label class="search-label">Marka</label>
-          <input type="text" name="brand" placeholder="Tüm Markalar (ör. BMW)" value="{{$filter.Brand}}" class="search-input">
+      <form method="GET" action="/listings" class="hero-unified-form">
+        <!-- ÜST ARAMA ÇUBUĞU (MARKA, MODEL, ŞEHİR) -->
+        <div class="hero-search-top-row">
+          <div class="search-input-group">
+            <label class="search-label">Marka</label>
+            <input type="text" name="brand" placeholder="Tüm Markalar (ör. BMW)" value="{{$filter.Brand}}" class="search-input">
+          </div>
+
+          <div class="search-divider"></div>
+
+          <div class="search-input-group">
+            <label class="search-label">Model</label>
+            <input type="text" name="model" placeholder="Tüm Modeller (ör. 320i)" value="{{$filter.Model}}" class="search-input">
+          </div>
+
+          <div class="search-divider"></div>
+
+          <div class="search-input-group">
+            <label class="search-label">Şehir / Konum</label>
+            <input type="text" name="city" placeholder="Tüm Şehirler (ör. İstanbul)" value="{{$filter.City}}" class="search-input">
+          </div>
+
+          <button type="submit" class="btn-hero-search">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Araç Ara
+          </button>
         </div>
 
-        <div class="search-divider"></div>
-
-        <div class="search-input-group">
-          <label class="search-label">Model</label>
-          <input type="text" name="model" placeholder="Tüm Modeller (ör. 320i)" value="{{$filter.Model}}" class="search-input">
+        <!-- ALT DETAYLI FİLTRE IZGARASI -->
+        <div class="hero-filter-details-row">
+          <div class="filter-field">
+            <label class="filter-mini-label">Min Yıl</label>
+            <input type="number" name="year_min" min="1950" max="{{$currentYear}}" placeholder="1950" value="{{if $filter.YearMin}}{{$filter.YearMin}}{{end}}" class="filter-mini-input">
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Max Yıl</label>
+            <input type="number" name="year_max" min="1950" max="{{$currentYear}}" placeholder="{{$currentYear}}" value="{{if $filter.YearMax}}{{$filter.YearMax}}{{end}}" class="filter-mini-input">
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Min Fiyat (TL)</label>
+            <input type="number" name="price_min" min="0" step="1000" placeholder="100.000" value="{{if $filter.PriceMin}}{{$filter.PriceMin}}{{end}}" class="filter-mini-input">
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Max Fiyat (TL)</label>
+            <input type="number" name="price_max" min="0" step="1000" placeholder="2.000.000" value="{{if $filter.PriceMax}}{{$filter.PriceMax}}{{end}}" class="filter-mini-input">
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Max KM</label>
+            <input type="number" name="max_mileage" min="0" placeholder="150.000" value="{{if $filter.MaxMileage}}{{$filter.MaxMileage}}{{end}}" class="filter-mini-input">
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Yakıt Tipi</label>
+            <select name="fuel_type" class="filter-mini-select">
+              <option value="">Tümü</option>
+              <option value="benzin"   {{if eq $filter.FuelType "benzin"}}selected{{end}}>Benzin</option>
+              <option value="dizel"    {{if eq $filter.FuelType "dizel"}}selected{{end}}>Dizel</option>
+              <option value="lpg"      {{if eq $filter.FuelType "lpg"}}selected{{end}}>LPG</option>
+              <option value="elektrik" {{if eq $filter.FuelType "elektrik"}}selected{{end}}>Elektrik</option>
+              <option value="hibrit"   {{if eq $filter.FuelType "hibrit"}}selected{{end}}>Hibrit</option>
+            </select>
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Vites Tipi</label>
+            <select name="transmission" class="filter-mini-select">
+              <option value="">Tümü</option>
+              <option value="otomatik"      {{if eq $filter.Transmission "otomatik"}}selected{{end}}>Otomatik</option>
+              <option value="manuel"        {{if eq $filter.Transmission "manuel"}}selected{{end}}>Manuel</option>
+              <option value="yarı-otomatik" {{if eq $filter.Transmission "yarı-otomatik"}}selected{{end}}>Yarı-Otomatik</option>
+            </select>
+          </div>
+          <div class="filter-field">
+            <label class="filter-mini-label">Hasar Durumu</label>
+            <select name="damage_status" class="filter-mini-select">
+              <option value="">Tümü</option>
+              {{range $damageStatuses}}
+                <option value="{{.}}" {{if eq . $filter.DamageStatus}}selected{{end}}>
+                  {{index $damageLabel .}}
+                </option>
+              {{end}}
+            </select>
+          </div>
+          <div class="filter-field-actions">
+            <a href="/listings" class="btn-filter-reset">Temizle</a>
+          </div>
         </div>
-
-        <div class="search-divider"></div>
-
-        <div class="search-input-group">
-          <label class="search-label">Şehir / Konum</label>
-          <input type="text" name="city" placeholder="Tüm Şehirler (ör. İstanbul)" value="{{$filter.City}}" class="search-input">
-        </div>
-
-        <button type="submit" class="btn-hero-search">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-          Araç Ara
-        </button>
       </form>
-    </div>
-
-    <!-- KASA TİPİ PİLLLERİ -->
-    <div class="hero-categories">
-      <span class="cat-label">Gövde Tipi Seçin:</span>
-      <div class="cat-pills">
-        <a href="/listings?fuel_type=benzin" class="cat-pill">
-          <span class="cat-icon">🚗</span> Sedan
-        </a>
-        <a href="/listings?max_mileage=100000" class="cat-pill">
-          <span class="cat-icon">🚙</span> SUV
-        </a>
-        <a href="/listings?fuel_type=dizel" class="cat-pill">
-          <span class="cat-icon">🏎️</span> Hatchback
-        </a>
-        <a href="/listings?year_min=2021" class="cat-pill">
-          <span class="cat-icon">🚘</span> Coupe
-        </a>
-        <a href="/listings?fuel_type=hibrit" class="cat-pill">
-          <span class="cat-icon">⚡</span> Hibrit / Elektrik
-        </a>
-      </div>
     </div>
   </div>
 </section>
@@ -191,65 +224,10 @@
       </div>
     </section>
 
-    <!-- DETAYLI FİLTRE PANELİ (AKORDİYON) -->
-    <details class="advanced-filter-details">
-      <summary class="advanced-filter-summary">
-        <span>⚙️ Detaylı Arama & Filtreleme (Yıl, KM, Hasar Durumu, Yakıt)</span>
-        <span class="summary-toggle-icon">▼</span>
-      </summary>
-      <div class="filter-panel-body">
-        <form method="GET" action="/listings">
-          <input type="hidden" name="brand" value="{{$filter.Brand}}">
-          <input type="hidden" name="model" value="{{$filter.Model}}">
-          <div class="filter-grid">
-            <div>
-              <label class="filter-label">Şehir</label>
-              <input type="text" name="city" placeholder="ör. İstanbul" value="{{$filter.City}}" class="filter-input">
-            </div>
-            <div>
-              <label class="filter-label">Yıl (Min)</label>
-              <input type="number" name="year_min" min="1950" max="{{$currentYear}}" placeholder="1950" value="{{if $filter.YearMin}}{{$filter.YearMin}}{{end}}" class="filter-input">
-            </div>
-            <div>
-              <label class="filter-label">Yıl (Max)</label>
-              <input type="number" name="year_max" min="1950" max="{{$currentYear}}" placeholder="{{$currentYear}}" value="{{if $filter.YearMax}}{{$filter.YearMax}}{{end}}" class="filter-input">
-            </div>
-            <div>
-              <label class="filter-label">Maksimum KM</label>
-              <input type="number" name="max_mileage" min="0" placeholder="ör. 150000" value="{{if $filter.MaxMileage}}{{$filter.MaxMileage}}{{end}}" class="filter-input">
-            </div>
-            <div>
-              <label class="filter-label">Yakıt Tipi</label>
-              <select name="fuel_type" class="filter-select">
-                <option value="">Tümü</option>
-                <option value="benzin"   {{if eq $filter.FuelType "benzin"}}selected{{end}}>Benzin</option>
-                <option value="dizel"    {{if eq $filter.FuelType "dizel"}}selected{{end}}>Dizel</option>
-                <option value="lpg"      {{if eq $filter.FuelType "lpg"}}selected{{end}}>LPG</option>
-                <option value="elektrik" {{if eq $filter.FuelType "elektrik"}}selected{{end}}>Elektrik</option>
-                <option value="hibrit"   {{if eq $filter.FuelType "hibrit"}}selected{{end}}>Hibrit</option>
-              </select>
-            </div>
-            <div>
-              <label class="filter-label">Hasar Durumu</label>
-              <select name="damage_status" class="filter-select">
-                <option value="">Tümü</option>
-                {{range $damageStatuses}}
-                  <option value="{{.}}" {{if eq . $filter.DamageStatus}}selected{{end}}>
-                    {{index $damageLabel .}}
-                  </option>
-                {{end}}
-              </select>
-            </div>
-            <div style="display:flex; gap:0.5rem; align-items:flex-end;">
-              <button type="submit" class="btn btn-primary" style="flex:1;">Uygula</button>
-              <a href="/listings" class="btn btn-secondary">Temizle</a>
-            </div>
-          </div>
-        </form>
-      </div>
-    </details>
+    <!-- DETAYLI FİLTRE PANELİ KALDIRILDI - filtreleme arama formunda yapılmaktadır -->
 
-    <!-- 2. EXPLORE ALL VEHICLES (ARAÇ LİSTESİ) -->
+    <!-- 2. ARAÇ LİSTESİ -->
+    {{if not $isHome}}
     <section class="section-vehicles">
       <div class="section-header">
         <div>
@@ -389,6 +367,7 @@
         </div>
       {{end}}
     </section>
+    {{end}}{{/* end if not $isHome */}}
 
     <!-- 3. GET A FAIR PRICE FOR YOUR CAR (BOXCARS PROMO BANNER) -->
     <section class="section-promo-fair-price">

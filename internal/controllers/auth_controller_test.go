@@ -30,7 +30,7 @@ func newMockAuthService() *mockAuthService {
 	}
 }
 
-func (m *mockAuthService) Register(ctx context.Context, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error) {
+func (m *mockAuthService) Register(ctx context.Context, name, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error) {
 	if password != passwordConfirm {
 		return nil, "", time.Time{}, services.ErrPasswordsDoNotMatch
 	}
@@ -39,6 +39,7 @@ func (m *mockAuthService) Register(ctx context.Context, email, password, passwor
 	}
 	u := &models.UserDTO{
 		ID:    int64(len(m.users) + 1),
+		Name:  name,
 		Email: email,
 	}
 	m.users[email] = u
@@ -171,6 +172,7 @@ func TestRegisterPost_PasswordMismatch(t *testing.T) {
 	c := setupAuthController(t)
 
 	form := url.Values{}
+	form.Set("name", "Test User")
 	form.Set("email", "yeni@test.com")
 	form.Set("password", "Sifre123!")
 	form.Set("password_confirm", "FarkliSifre!")
@@ -190,9 +192,10 @@ func TestRegisterPost_DuplicateEmail(t *testing.T) {
 	c := setupAuthController(t)
 	// Önce kayıt ol
 	mockSvc := c.authService.(*mockAuthService)
-	mockSvc.users["mevcut@test.com"] = &models.UserDTO{ID: 1, Email: "mevcut@test.com"}
+	mockSvc.users["mevcut@test.com"] = &models.UserDTO{ID: 1, Name: "Test User", Email: "mevcut@test.com"}
 
 	form := url.Values{}
+	form.Set("name", "Test User")
 	form.Set("email", "mevcut@test.com")
 	form.Set("password", "Sifre123!")
 	form.Set("password_confirm", "Sifre123!")

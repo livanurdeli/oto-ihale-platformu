@@ -44,6 +44,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,8 +70,8 @@ const SessionDuration = 7 * 24 * time.Hour // 7 gün boyunca geçerli oturum sü
 
 // AuthServiceInterface, Controller (denetleyici) ile Service (iş mantığı) arasındaki sözleşmedir (arayüz).
 type AuthServiceInterface interface {
-	Register(ctx context.Context, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error)
-	Login(ctx context.Context, email, password string) (*models.UserDTO, string, time.Time, error)
+	Register(ctx context.Context, name, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error)
+	Login(ctx context.Context, identifier, password string) (*models.UserDTO, string, time.Time, error)
 	Logout(ctx context.Context, token string) error
 	ValidateSession(ctx context.Context, token string) (*models.UserDTO, error)
 	ListUsers(ctx context.Context) ([]*models.UserDTO, error)
@@ -101,8 +102,9 @@ func NewAuthService(userRepo repository.UserRepositoryInterface, sessionRepo rep
 }
 
 // Register, yeni kullanıcı kaydı açar ve otomatik oturum başlatır.
-func (s *AuthService) Register(ctx context.Context, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error) {
-	if email == "" || password == "" {
+func (s *AuthService) Register(ctx context.Context, name, email, password, passwordConfirm string) (*models.UserDTO, string, time.Time, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || email == "" || password == "" {
 		return nil, "", time.Time{}, ErrRequiredFieldsEmpty
 	}
 
@@ -119,7 +121,7 @@ func (s *AuthService) Register(ctx context.Context, email, password, passwordCon
 		return nil, "", time.Time{}, err
 	}
 
-	user, err := s.userRepo.CreateUser(ctx, email, hashed) // Hashlenmiş şifre ile yeni kullanıcı veritabanına eklenir
+	user, err := s.userRepo.CreateUser(ctx, name, email, hashed) // İsim ve hashlenmiş şifre ile yeni kullanıcı veritabanına eklenir
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}
@@ -139,60 +141,60 @@ func (s *AuthService) Register(ctx context.Context, email, password, passwordCon
 }
 
 // Login, kullanıcı girişini doğrular ve yeni bir session oluşturur (İstek sınırlama / Rate limit korumalı).
-func (s *AuthService) Login(ctx context.Context, email, password string) (*models.UserDTO, string, time.Time, error) {
-	if email == "" || password == "" {
+// Giriş hem e-posta hem de kullanıcı adı/isim ile yapılabilir.
+func (s *AuthService) Login(ctx context.Context, identifier, password string) (*models.UserDTO, string, time.Time, error) {
+	if identifier == "" || password == "" {
 		return nil, "", time.Time{}, ErrRequiredFieldsEmpty
 	}
 
-	normEmail := auth.NormalizeEmail(email) // Büyük/küçük harf uyumsuzluğunu önlemek ve boşlukları temizlemek için e-posta normalize edilir
+	normIdentifier := auth.NormalizeEmail(identifier)
 
 	// İstek Sınırlama (Rate Limiting): 15 dakikada en fazla 5 başarısız denemeye izin verilir (kaba kuvvet/brute-force koruması)
-	s.attemptsMu.Lock() // Harita erişiminde veri yarışını (race condition) engellemek için mutex kilitlenir
-	tracker, exists := s.failedAttempts[normEmail]
+	s.attemptsMu.Lock()
+	tracker, exists := s.failedAttempts[normIdentifier]
 	if exists {
 		if time.Since(tracker.firstFailed) > 15*time.Minute {
-			delete(s.failedAttempts, normEmail) // 15 dakika geçmişse bloke kaldırılır ve kayıt silinir
+			delete(s.failedAttempts, normIdentifier) // 15 dakika geçmişse bloke kaldırılır ve kayıt silinir
 		} else if tracker.count >= 5 {
-			s.attemptsMu.Unlock() // Erken dönüş öncesinde kilit mutlaka serbest bırakılır
+			s.attemptsMu.Unlock()
 			return nil, "", time.Time{}, ErrTooManyLoginAttempts
 		}
 	}
-	s.attemptsMu.Unlock() // Harita kontrolü bitince kilit açılır
+	s.attemptsMu.Unlock()
 
-	user, err := s.userRepo.GetUserByEmail(ctx, email) // Kullanıcı veritabanında e-posta adresine göre aranır
+	user, err := s.userRepo.GetUserByUsernameOrEmail(ctx, identifier)
 	if err != nil {
-		s.recordFailedAttempt(normEmail) // Başarısız deneme sayacı artırılır
+		s.recordFailedAttempt(normIdentifier)
 		// Zamanlama saldırısı (timing attack) koruması: Kullanıcı bulunamadığında bile sahte hash kontrolü yapılarak yanıt süresi eşitlenir
 		auth.DummyCheckPasswordHash(password)
 		return nil, "", time.Time{}, ErrInvalidCredentials
 	}
 
-	if !auth.CheckPasswordHash(password, user.PasswordHash) { // Girilen şifrenin veritabanındaki bcrypt özetiyle eşleşip eşleşmediği doğrulanır
-		s.recordFailedAttempt(normEmail) // Hatalı şifre denemesi sayaca işlenir
+	if !auth.CheckPasswordHash(password, user.PasswordHash) {
+		s.recordFailedAttempt(normIdentifier)
 		return nil, "", time.Time{}, ErrInvalidCredentials
 	}
 
-	if user.IsBlocked { // Kullanıcının hesabı yönetici tarafından engellenmiş mi kontrol edilir
+	if user.IsBlocked {
 		return nil, "", time.Time{}, ErrUserIsBlocked
 	}
 
 	// Başarılı girişte başarısız deneme sayacını temizle
 	s.attemptsMu.Lock()
-	delete(s.failedAttempts, normEmail) // Giriş başarılı olduğu için başarısız deneme kaydı silinir
+	delete(s.failedAttempts, normIdentifier)
 	s.attemptsMu.Unlock()
 
-	// Oturum (Session) Belirteci (Token) Üret ve Kaydet
-	token, err := auth.GenerateSessionToken() // Tahmin edilemez, güvenli oturum belirteci üretilir
+	token, err := auth.GenerateSessionToken()
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}
 
-	expiresAt := time.Now().Add(SessionDuration) // Oturumun 7 günlük geçerlilik bitiş süresi hesaplanır
-	if err := s.sessionRepo.CreateSession(ctx, token, user.ID, expiresAt); err != nil { // Oturum veritabanına yazılır
+	expiresAt := time.Now().Add(SessionDuration)
+	if err := s.sessionRepo.CreateSession(ctx, token, user.ID, expiresAt); err != nil {
 		return nil, "", time.Time{}, err
 	}
 
-	return user.ToDTO(), token, expiresAt, nil // Kullanıcı DTO'su, oturum anahtarı ve geçerlilik süresi döndürülür
+	return user.ToDTO(), token, expiresAt, nil
 }
 
 // recordFailedAttempt, başarısız giriş denemelerini e-posta bazında kayıt altına alır ve sayacı artırır.

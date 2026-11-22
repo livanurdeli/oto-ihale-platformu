@@ -90,6 +90,7 @@ func (c *ListingController) ListingsPage(w http.ResponseWriter, r *http.Request)
 		Model:        strings.TrimSpace(q.Get("model")),
 		City:         strings.TrimSpace(q.Get("city")),
 		FuelType:     strings.TrimSpace(q.Get("fuel_type")),
+		Transmission: strings.TrimSpace(q.Get("transmission")),
 		DamageStatus: models.DamageStatus(strings.TrimSpace(q.Get("damage_status"))),
 		Status:       strings.TrimSpace(q.Get("status")), // 'active', 'ended', '' (varsayılan: active)
 		Page:         parseInt(q.Get("page"), 1),
@@ -98,22 +99,34 @@ func (c *ListingController) ListingsPage(w http.ResponseWriter, r *http.Request)
 	filter.YearMin = parseInt(q.Get("year_min"), 0)
 	filter.YearMax = parseInt(q.Get("year_max"), 0)
 	filter.MaxMileage = parseInt(q.Get("max_mileage"), 0)
+	filter.PriceMin = parseFloat(q.Get("price_min"), 0)
+	filter.PriceMax = parseFloat(q.Get("price_max"), 0)
+
+	isHome := r.URL.Path == "/" && !filter.HasAnyFilter()
+
+	activeNav := "listings"
+	pageTitle := "Açık Artırmalar"
+	if isHome {
+		activeNav = "home"
+		pageTitle = "Ana Sayfa"
+	}
 
 	result, err := c.listingService.ListListings(r.Context(), filter)
 	if err != nil {
-		data := NewViewData(r, "İlanlar", "listings")
+		data := NewViewData(r, pageTitle, activeNav)
 		data.Error = "İlanlar yüklenirken bir hata oluştu."
 		RenderView(w, http.StatusInternalServerError, c.listingsView, data)
 		return
 	}
 
-	data := NewViewData(r, "Açık Artırmalar", "listings")
+	data := NewViewData(r, pageTitle, activeNav)
 	data.Data = map[string]interface{}{
 		"Page":           result,
 		"Filter":         filter,
 		"DamageStatuses": models.AllDamageStatuses,
 		"DamageLabel":    models.DamageStatusLabel,
 		"CurrentYear":    time.Now().Year(),
+		"IsHome":         isHome,
 	}
 	RenderView(w, http.StatusOK, c.listingsView, data)
 }

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=otoihale-4.0">
+  <link rel="stylesheet" href="/static/css/style.css?v=otoihale-5.0">
 </head>
 <body class="boxcars-theme">
 
@@ -21,13 +21,12 @@
 
       <nav class="boxcars-nav">
         <ul class="nav-menu">
-          <li><a href="/" class="nav-item {{if eq .ActiveNav "listings"}}active{{end}}">Ana Sayfa</a></li>
-          <li><a href="/listings" class="nav-item">Açık Artırmalar</a></li>
+          <li><a href="/" class="nav-item {{if eq .ActiveNav "home"}}active{{end}}">Ana Sayfa</a></li>
+          <li><a href="/listings" class="nav-item {{if eq .ActiveNav "listings"}}active{{end}}">Açık Artırmalar</a></li>
           <li><a href="/listings/new" class="nav-item">Fiyat Değerleme</a></li>
           {{if .IsAuthenticated}}
             <li><a href="/my/bids" class="nav-item {{if eq .ActiveNav "my_bids"}}active{{end}}">Tekliflerim</a></li>
             <li><a href="/my/listings" class="nav-item {{if eq .ActiveNav "my_listings"}}active{{end}}">İlanlarım</a></li>
-            <li><a href="/dashboard" class="nav-item {{if eq .ActiveNav "dashboard"}}active{{end}}">Kullanıcı Paneli</a></li>
             {{if .User.IsAdmin}}
               <li><a href="/admin/dashboard" class="nav-item nav-admin {{if eq .ActiveNav "admin"}}active{{end}}">🛡️ Yönetici</a></li>
             {{end}}
@@ -39,7 +38,7 @@
         {{if .IsAuthenticated}}
           <div class="user-pill">
             <span class="user-avatar">👤</span>
-            <span class="user-email">{{.User.Email}}</span>
+            <span class="user-email">{{.User.DisplayName}}</span>
           </div>
           <form action="/logout" method="POST" style="margin: 0;">
             <button type="submit" class="btn-boxcars-outline">Çıkış</button>
@@ -108,7 +107,6 @@
             <li><a href="/listings">Tüm Araçlar</a></li>
             <li><a href="/listings/new">Yeni İlan Oluştur</a></li>
             <li><a href="/my/bids">Verdiğim Teklifler</a></li>
-            <li><a href="/dashboard">Kullanıcı Paneli</a></li>
           </ul>
         </div>
 
@@ -135,18 +133,11 @@
       </div>
     </div>
 
-    <!-- ALT İMZA BÖLÜMÜ (LİVANUR DELİ) -->
+    <!-- ALT BÖLÜM -->
     <div class="footer-bottom">
       <div class="boxcars-container footer-bottom-inner">
         <div class="copyright">
-          © 2026 <strong>Otoİhale Platformu</strong>. Tüm hakları saklıdır.
-        </div>
-
-        <!-- KULLANICININ İSTEDİĞİ İMZA -->
-        <div class="developer-signature">
-          <span class="heart-pulse">❤️</span>
-          <span><strong>Livanur Deli</strong> Tarafından Tasarlandı ve Geliştirildi</span>
-          <span class="sig-badge">Livanur Deli tarafından yapıldı</span>
+          © 2026 <strong>OtoİHale Platformu</strong>. Tüm hakları saklıdır.
         </div>
       </div>
     </div>

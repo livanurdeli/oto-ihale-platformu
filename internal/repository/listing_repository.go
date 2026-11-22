@@ -144,23 +144,27 @@ func (r *ListingRepository) GetListingByID(ctx context.Context, id int64) (*mode
 		SELECT l.id, l.user_id, l.brand, l.model, l.year, l.mileage, l.fuel_type, l.transmission, l.city,
 		       l.description, l.damage_status, l.status, l.engine_volume, l.estimated_price,
 		       l.starting_price, l.min_increment, l.end_time, l.current_bid, l.winner_user_id, l.winning_bid,
-		       COALESCE(u.email, '') AS winner_email,
+		       COALESCE(w.email, '') AS winner_email,
+		       COALESCE(w.name, '') AS winner_name,
+		       COALESCE(u.name, '') AS owner_name,
+		       COALESCE(u.email, '') AS owner_email,
 		       l.created_at, l.updated_at
 		FROM listings l
-		LEFT JOIN users u ON l.winner_user_id = u.id
+		LEFT JOIN users w ON l.winner_user_id = w.id
+		LEFT JOIN users u ON l.user_id = u.id
 		WHERE l.id = $1
 	`
 	row := r.db.QueryRowContext(ctx, query, id)
 
 	var l models.Listing
 	var dmg string
-	var winnerEmail string
+	var winnerEmail, winnerName, ownerName, ownerEmail string
 	err := row.Scan(
 		&l.ID, &l.UserID, &l.Brand, &l.Model, &l.Year, &l.Mileage, &l.FuelType,
 		&l.Transmission, &l.City, &l.Description, &dmg, &l.Status,
 		&l.EngineVolume, &l.EstimatedPrice,
 		&l.StartingPrice, &l.MinIncrement, &l.EndTime, &l.CurrentBid,
-		&l.WinnerUserID, &l.WinningBid, &winnerEmail,
+		&l.WinnerUserID, &l.WinningBid, &winnerEmail, &winnerName, &ownerName, &ownerEmail,
 		&l.CreatedAt, &l.UpdatedAt,
 	)
 	if err != nil {
@@ -171,6 +175,9 @@ func (r *ListingRepository) GetListingByID(ctx context.Context, id int64) (*mode
 	}
 	l.DamageStatus = models.DamageStatus(dmg)
 	l.WinnerEmail = winnerEmail
+	l.WinnerName = winnerName
+	l.OwnerName = ownerName
+	l.OwnerEmail = ownerEmail
 
 	photos, err := r.GetPhotosByListingID(ctx, l.ID)
 	if err != nil {
@@ -427,7 +434,7 @@ func (r *ListingRepository) PlaceBid(ctx context.Context, listingID, userID int6
 // GetBidsByListingID, ilana ait tüm teklifleri en yüksekten en düşüğe döner.
 func (r *ListingRepository) GetBidsByListingID(ctx context.Context, listingID int64) ([]models.Bid, error) {
 	query := `
-		SELECT b.id, b.listing_id, b.user_id, u.email, b.amount, b.created_at
+		SELECT b.id, b.listing_id, b.user_id, u.email, COALESCE(u.name, '') AS user_name, b.amount, b.created_at
 		FROM bids b
 		JOIN users u ON b.user_id = u.id
 		WHERE b.listing_id = $1
@@ -442,7 +449,7 @@ func (r *ListingRepository) GetBidsByListingID(ctx context.Context, listingID in
 	var bids []models.Bid
 	for rows.Next() {
 		var b models.Bid
-		err := rows.Scan(&b.ID, &b.ListingID, &b.UserID, &b.UserEmail, &b.Amount, &b.CreatedAt)
+		err := rows.Scan(&b.ID, &b.ListingID, &b.UserID, &b.UserEmail, &b.UserName, &b.Amount, &b.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -695,6 +702,18 @@ func BuildListingFilter(f models.ListingFilter) (string, []interface{}) {
 	if f.DamageStatus != "" {
 		args = append(args, string(f.DamageStatus))
 		conditions = append(conditions, fmt.Sprintf("l.damage_status = $%d", len(args)))
+	}
+	if f.Transmission != "" {
+		args = append(args, f.Transmission)
+		conditions = append(conditions, fmt.Sprintf("l.transmission = $%d", len(args)))
+	}
+	if f.PriceMin > 0 {
+		args = append(args, f.PriceMin)
+		conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(l.current_bid, 0), l.starting_price) >= $%d", len(args)))
+	}
+	if f.PriceMax > 0 {
+		args = append(args, f.PriceMax)
+		conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(l.current_bid, 0), l.starting_price) <= $%d", len(args)))
 	}
 	if f.MaxMileage > 0 {
 		args = append(args, f.MaxMileage)

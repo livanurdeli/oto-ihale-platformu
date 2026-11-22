@@ -130,7 +130,7 @@
                       {{if eq $i 0}}🏆 En Yüksek{{else}}{{add $i 1}}{{end}}
                     </td>
                     <td style="padding: 10px 8px; color: #334151;">
-                      {{$bid.UserEmail}}
+                      {{if $bid.UserName}}{{$bid.UserName}}{{else}}{{$bid.UserEmail}}{{end}}
                     </td>
                     <td style="padding: 10px 8px; color: #059669; font-weight: 700;">
                       {{formatPrice $bid.Amount}} TL
@@ -202,7 +202,7 @@
             {{if $listing.WinnerEmail}}
               <div style="font-size: 1.5rem; margin-bottom: 4px;">🏆</div>
               <div style="font-weight: 800; color: #1e40af; font-size: 1.1rem;">Açık Artırma Kazananı</div>
-              <div id="winner-email-display" style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">{{$listing.WinnerEmail}}</div>
+              <div id="winner-email-display" style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">{{if $listing.WinnerName}}{{$listing.WinnerName}}{{else}}{{$listing.WinnerEmail}}{{end}}</div>
               <div id="winner-bid-display" style="color: #059669; font-weight: 800; font-size: 1.25rem;">{{formatPrice $listing.WinningBid}} TL</div>
             {{else}}
               <div style="color: #64748b; font-size: 0.9rem;">
@@ -269,6 +269,10 @@
         </h3>
 
         <div class="spec-grid" style="grid-template-columns: 1fr;">
+          <div class="spec-item">
+            <div class="spec-label">İlan Sahibi</div>
+            <div class="spec-value" style="font-weight: 700; color: #1e40af;">{{if $listing.OwnerName}}{{$listing.OwnerName}}{{else if $listing.OwnerEmail}}{{$listing.OwnerEmail}}{{else}}Satıcı{{end}}</div>
+          </div>
           <div class="spec-item">
             <div class="spec-label">Marka</div>
             <div class="spec-value">{{$listing.Brand}}</div>

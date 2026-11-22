@@ -40,16 +40,18 @@ import (
 // UserRepositoryInterface, kullanıcı veritabanı işlemlerinin sözleşmesidir.
 // Role ve admin yetkileri kaldırılmıştır; tüm kullanıcılar standart üyedir.
 type UserRepositoryInterface interface {
-	// CreateUser, sisteme yeni bir kullanıcı kaydeder (e-posta ve şifrelenmiş parola ile).
-	CreateUser(ctx context.Context, email, passwordHash string) (*models.User, error)
+	// CreateUser, sisteme yeni bir kullanıcı kaydeder (isim, e-posta ve şifrelenmiş parola ile).
+	CreateUser(ctx context.Context, name, email, passwordHash string) (*models.User, error)
 	// GetUserByEmail, e-posta adresine göre kullanıcı kaydını veritabanından sorgular.
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
+	// GetUserByUsernameOrEmail, e-posta veya kullanıcı adı/isime göre kullanıcı kaydını bulur.
+	GetUserByUsernameOrEmail(ctx context.Context, identifier string) (*models.User, error)
 	// GetUserByID, benzersiz kullanıcı kimlik numarasına (ID) göre kullanıcıyı bulur.
 	GetUserByID(ctx context.Context, id int64) (*models.User, error)
 	// GetUserStatus, kullanıcının sistemde engellenip engellenmediğini (isBlocked) döner.
 	GetUserStatus(ctx context.Context, id int64) (isBlocked bool, err error) // Kullanıcının engelli olup olmadığını kontrol eder
 	// CreateInitialUserIfNotExists, sistem ilk ayağa kalktığında belirtilen kullanıcı yoksa oluşturur.
-	CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash, role string) error // İlk kurulumda yönetici (admin) veya varsayılan kullanıcıyı ekler
+	CreateInitialUserIfNotExists(ctx context.Context, name, email, passwordHash, role string) error // İlk kurulumda yönetici (admin) veya varsayılan kullanıcıyı ekler
 	// ListUsers, sistemdeki tüm kayıtlı kullanıcıları şifresiz veri modeliyle (DTO) listeler.
 	ListUsers(ctx context.Context) ([]*models.UserDTO, error) // Şifre özetini gizleyen güvenli kullanıcı listesini döner
 	// SetUserBlocked, bir kullanıcının sisteme erişimini engeller veya engeli kaldırır.

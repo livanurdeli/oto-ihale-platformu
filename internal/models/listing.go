@@ -114,6 +114,9 @@ type Listing struct {
 	WinnerUserID  *int64    `json:"winner_user_id,omitempty"` // Açık artırmayı kazanan kullanıcının kimlik numarası (kazanan yoksa nil)
 	WinningBid    *float64  `json:"winning_bid,omitempty"`    // Açık artırmayı kazandıran son teklif tutarı (kazanan yoksa nil)
 	WinnerEmail   string    `json:"winner_email,omitempty"`   // Kazanan kullanıcının e-posta adresi (iletişim ve bilgilendirme için)
+	WinnerName    string    `json:"winner_name,omitempty"`    // Kazanan kullanıcının adı/kullanıcı adı
+	OwnerName     string    `json:"owner_name,omitempty"`     // İlan sahibinin adı/kullanıcı adı
+	OwnerEmail    string    `json:"owner_email,omitempty"`    // İlan sahibinin e-posta adresi
 
 	// İlişkiler (Diğer tablolarla bağlantılı veriler)
 	Photos []ListingPhoto `json:"photos,omitempty"` // İlana ait yüklenmiş tüm fotoğrafların listesi
@@ -150,6 +153,7 @@ type Bid struct {
 	ListingID int64     `json:"listing_id"`           // Teklifin verildiği ilanın kimlik numarası (yabancı anahtar / foreign key)
 	UserID    int64     `json:"user_id"`              // Teklifi veren kullanıcının kimlik numarası (yabancı anahtar / foreign key)
 	UserEmail string    `json:"user_email,omitempty"` // Teklifi veren kullanıcının e-posta adresi (arayüzde göstermek için)
+	UserName  string    `json:"user_name,omitempty"`  // Teklifi veren kullanıcının adı (arayüzde göstermek için)
 	Amount    float64   `json:"amount"`               // Teklif edilen para tutarı (TL cinsinden)
 	CreatedAt time.Time `json:"created_at"`           // Teklifin sisteme kaydedildiği tarih ve saat
 }
@@ -179,13 +183,24 @@ type ListingFilter struct {
 	Model        string       // Modele göre filtreleme (örneğin: "Megane")
 	YearMin      int          // Listelenecek araçlar için en küçük üretim yılı alt sınırı
 	YearMax      int          // Listelenecek araçlar için en büyük üretim yılı üst sınırı
+	PriceMin     float64      // Minimum taban/teklif fiyatı
+	PriceMax     float64      // Maksimum bütçe fiyatı
 	City         string       // Aracın bulunduğu şehre göre filtreleme
 	FuelType     string       // Yakıt türüne göre filtreleme (benzin, dizel vb.)
+	Transmission string       // Vites türüne göre filtreleme (otomatik, manuel vb.)
 	DamageStatus DamageStatus // Hasar durumuna göre filtreleme (hatasız, boyalı vb.)
 	MaxMileage   int          // Kilometre üst sınırı (bu değerden az olan araçlar listelenir)
 	Status       string       // İlan durumu filtresi: 'active' (aktif), 'ended' (sona ermiş), 'all' (tümü)
 	Page         int          // İstenen sayfa numarası (sayfalama / pagination işlemi için)
 	PerPage      int          // Sayfa başına listelenecek ilan adedi
+}
+
+// HasAnyFilter, kullanıcının herhangi bir arama veya filtre kriteri belirtip belirtmediğini kontrol eder.
+func (f *ListingFilter) HasAnyFilter() bool {
+	return f.Brand != "" || f.Model != "" || f.YearMin > 0 || f.YearMax > 0 ||
+		f.PriceMin > 0 || f.PriceMax > 0 || f.City != "" || f.FuelType != "" ||
+		f.Transmission != "" || f.DamageStatus != "" || f.MaxMileage > 0 ||
+		(f.Status != "" && f.Status != "active")
 }
 
 // Page, sayfalanmış (paginated) bir sonuç kümesini ve sayfalama üst verilerini temsil eden jenerik (generic) yapıdır.

@@ -11,6 +11,15 @@
 
     <form method="POST" action="/register" style="display: flex; flex-direction: column; gap: 1.2rem;">
       <div>
+        <label for="name" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+          Ad Soyad / Kullanıcı Adı
+        </label>
+        <input type="text" id="name" name="name" required placeholder="ör. Ahmet Yılmaz"
+          style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none;"
+          onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
+      </div>
+
+      <div>
         <label for="email" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
           E-posta Adresi
         </label>

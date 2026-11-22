@@ -96,7 +96,7 @@ func (c *AuthController) LoginPost(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimSpace(r.FormValue("email")) // E-posta adresinin başındaki ve sonundaki gereksiz boşlukları temizler
 	password := r.FormValue("password")
 
-	_, token, expiresAt, err := c.authService.Login(r.Context(), email, password) // Servis katmanında kimlik doğrulaması yapılır ve oturum anahtarı (token) üretilir
+	_, token, expiresAt, err := c.authService.Login(r.Context(), email, password) // Servis katmanında kimlik doğrulaması yapılır ve oturum anahtarı (token) üretilir // Servis katmanında kimlik doğrulaması yapılır ve oturum anahtarı (token) üretilir
 	if err != nil {
 		c.renderLoginError(w, r, err.Error())
 		return
@@ -132,8 +132,9 @@ func (c *AuthController) RegisterPost(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimSpace(r.FormValue("email")) // E-posta metnindeki gereksiz boşluklar temizlenir
 	password := r.FormValue("password")
 	passwordConfirm := r.FormValue("password_confirm")
+	name := strings.TrimSpace(r.FormValue("name")) // Kullanıcı adı/isim
 
-	_, token, expiresAt, err := c.authService.Register(r.Context(), email, password, passwordConfirm) // Servis katmanında şifre kuralları denetlenir ve kullanıcı veritabanına kaydedilir
+	_, token, expiresAt, err := c.authService.Register(r.Context(), name, email, password, passwordConfirm) // Servis katmanında şifre kuralları denetlenir ve kullanıcı veritabanına kaydedilir
 	if err != nil {
 		c.renderRegisterError(w, r, err.Error())
 		return
@@ -196,6 +197,7 @@ func (c *AuthController) Forbidden(w http.ResponseWriter, r *http.Request) {
 
 // registerRequest, API üzerinden gelen kayıt isteğinin JSON gövdesini (body) temsil eden veri yapısıdır.
 type registerRequest struct {
+	Name            string `json:"name"`             // Kullanıcının adı/kullanıcı adı
 	Email           string `json:"email"`            // Kayıt olunacak e-posta adresi
 	Password        string `json:"password"`         // Kullanıcının belirlediği hesap şifresi
 	PasswordConfirm string `json:"password_confirm"` // Şifre doğrulama ve eşleşme kontrol alanı
@@ -203,7 +205,7 @@ type registerRequest struct {
 
 // loginRequest, API üzerinden gelen giriş isteğinin JSON gövdesini temsil eden veri yapısıdır.
 type loginRequest struct {
-	Email    string `json:"email"`    // Sisteme giriş yapacak kullanıcının e-posta adresi
+	Email    string `json:"email"`    // Sisteme giriş yapacak kullanıcının e-posta adresi veya kullanıcı adı
 	Password string `json:"password"` // Kullanıcının hesap şifresi
 }
 
@@ -222,7 +224,7 @@ func (c *AuthController) APIRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, token, expiresAt, err := c.authService.Register(r.Context(), req.Email, req.Password, req.PasswordConfirm)
+	user, token, expiresAt, err := c.authService.Register(r.Context(), req.Name, req.Email, req.Password, req.PasswordConfirm)
 	if err != nil {
 		handleServiceError(w, err) // Servisten dönen hatanın türüne göre uygun HTTP durum kodu (400, 409 vb.) atanır
 		return

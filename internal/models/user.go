@@ -22,6 +22,7 @@ import "time"
 // Kullanıcı hesap bilgilerini ve kimlik doğrulama için gerekli şifre özetini saklar.
 type User struct {
 	ID           int64     `json:"id"`           // Benzersiz kullanıcı kimlik numarası (birincil anahtar)
+	Name         string    `json:"name"`         // Kullanıcının adı soyadı veya kullanıcı adı
 	Email        string    `json:"email"`        // Kullanıcının sisteme giriş yaptığı benzersiz e-posta adresi
 	PasswordHash string    `json:"-"`            // Şifrelenmiş parola özeti (güvenlik için JSON ve istemciye asla sızdırılmaz)
 	Role         string    `json:"role"`         // Kullanıcı yetki rolü ('user': standart kullanıcı, 'admin': yönetici)
@@ -34,11 +35,23 @@ type User struct {
 // Şifre özeti gibi hassas alanları içermez; istemciye ve web arayüzüne güvenle gönderilir.
 type UserDTO struct {
 	ID        int64     `json:"id"`        // Kullanıcının benzersiz kimlik numarası
+	Name      string    `json:"name"`      // Kullanıcının adı soyadı / kullanıcı adı
 	Email     string    `json:"email"`     // Kullanıcının e-posta adresi
 	Role      string    `json:"role"`      // Kullanıcının yetki rolü ('user' veya 'admin')
 	IsBlocked bool      `json:"is_blocked"` // Kullanıcının sistemde engelli olup olmadığını belirten durum
 	CreatedAt time.Time `json:"created_at"` // Hesabın oluşturulma tarihi ve saati
 	UpdatedAt time.Time `json:"updated_at"` // Hesap bilgilerinin son güncellenme tarihi ve saati
+}
+
+// DisplayName, ekranda gösterilecek kullanıcı adını döner (isim varsa isim, yoksa e-posta).
+func (u *UserDTO) DisplayName() string {
+	if u != nil && u.Name != "" {
+		return u.Name
+	}
+	if u != nil && u.Email != "" {
+		return u.Email
+	}
+	return "Kullanıcı"
 }
 
 // IsAdmin, kullanıcının yönetici (admin) yetkisine sahip olup olmadığını kontrol eder.
@@ -59,6 +72,7 @@ func (u *User) ToDTO() *UserDTO {
 	}
 	return &UserDTO{
 		ID:        u.ID,
+		Name:      u.Name,
 		Email:     u.Email,
 		Role:      role,
 		IsBlocked: u.IsBlocked,

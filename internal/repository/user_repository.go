@@ -51,19 +51,19 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 
 // CreateUser, sisteme yeni bir kullanıcı ekler (varsayılan rol: 'user').
 // Veritabanına yeni satır ekleyip oluşturulan kullanıcının verilerini döner.
-func (r *UserRepository) CreateUser(ctx context.Context, email, passwordHash string) (*models.User, error) {
+func (r *UserRepository) CreateUser(ctx context.Context, name, email, passwordHash string) (*models.User, error) {
 	normEmail := auth.NormalizeEmail(email) // E-postayı küçük harfe çevirip kenar boşluklarını temizler
 
 	query := `
-		INSERT INTO users (email, password_hash, role, is_blocked, created_at, updated_at)
-		VALUES ($1, $2, 'user', FALSE, NOW(), NOW())
-		RETURNING id, email, password_hash, role, is_blocked, created_at, updated_at
+		INSERT INTO users (name, email, password_hash, role, is_blocked, created_at, updated_at)
+		VALUES ($1, $2, $3, 'user', FALSE, NOW(), NOW())
+		RETURNING id, name, email, password_hash, role, is_blocked, created_at, updated_at
 	` // Yeni kaydı ekler ve veritabanı tarafından üretilen alanları (ID, tarihler vb.) anında geri döndürür
 
 	var u models.User
-	// Parametreli ($1, $2) sorguyu çalıştırır ve dönen satırı User modeline aktarır
-	err := r.db.QueryRowContext(ctx, query, normEmail, passwordHash).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
+	// Parametreli ($1, $2, $3) sorguyu çalıştırır ve dönen satırı User modeline aktarır
+	err := r.db.QueryRowContext(ctx, query, name, normEmail, passwordHash).Scan(
+		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -83,14 +83,14 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 
 	// LOWER() fonksiyonu ile büyük-küçük harf farkı gözetmeksizin arama yapılır
 	query := `
-		SELECT id, email, password_hash, role, is_blocked, created_at, updated_at
+		SELECT id, name, email, password_hash, role, is_blocked, created_at, updated_at
 		FROM users
 		WHERE LOWER(email) = LOWER($1)
 	`
 
 	var u models.User
 	err := r.db.QueryRowContext(ctx, query, normEmail).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) { // Belirtilen e-posta ile eşleşen bir kayıt bulunamazsa
@@ -102,17 +102,42 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 	return &u, nil
 }
 
+// GetUserByUsernameOrEmail, e-posta veya isim/kullanıcı adına göre kullanıcıyı bulur.
+func (r *UserRepository) GetUserByUsernameOrEmail(ctx context.Context, identifier string) (*models.User, error) {
+	norm := auth.NormalizeEmail(identifier)
+
+	query := `
+		SELECT id, name, email, password_hash, role, is_blocked, created_at, updated_at
+		FROM users
+		WHERE LOWER(email) = LOWER($1) OR (name <> '' AND LOWER(name) = LOWER($1))
+		LIMIT 1
+	`
+
+	var u models.User
+	err := r.db.QueryRowContext(ctx, query, norm).Scan(
+		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	return &u, nil
+}
+
 // GetUserByID, benzersiz kimlik numarasına (ID) göre kullanıcıyı veritabanından getirir.
 func (r *UserRepository) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
 	query := `
-		SELECT id, email, password_hash, role, is_blocked, created_at, updated_at
+		SELECT id, name, email, password_hash, role, is_blocked, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`
 
 	var u models.User
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) { // Belirtilen ID'ye sahip kullanıcı bulunamazsa
@@ -138,19 +163,19 @@ func (r *UserRepository) GetUserStatus(ctx context.Context, id int64) (isBlocked
 }
 
 // CreateInitialUserIfNotExists, başlangıç demo veya yönetici hesaplarını oluşturur (kullanıcı zaten varsa dokunmaz).
-func (r *UserRepository) CreateInitialUserIfNotExists(ctx context.Context, email, passwordHash, role string) error {
+func (r *UserRepository) CreateInitialUserIfNotExists(ctx context.Context, name, email, passwordHash, role string) error {
 	normEmail := auth.NormalizeEmail(email) // E-posta adresini standart formata çevirir
 	if role == "" {
 		role = "user" // Rol belirtilmemişse varsayılan standart kullanıcı rolü atanır
 	}
 
-	// ON CONFLICT: E-posta zaten mevcutsa hata üretmez, mevcut kaydın rolünü günceller (Upsert işlemi)
+	// ON CONFLICT: E-posta zaten mevcutsa hata üretmez, mevcut kaydın rolünü ve adını günceller (Upsert işlemi)
 	query := `
-		INSERT INTO users (email, password_hash, role, is_blocked, created_at, updated_at)
-		VALUES ($1, $2, $3, FALSE, NOW(), NOW())
-		ON CONFLICT (LOWER(email)) DO UPDATE SET role = EXCLUDED.role
+		INSERT INTO users (name, email, password_hash, role, is_blocked, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, FALSE, NOW(), NOW())
+		ON CONFLICT (LOWER(email)) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role
 	`
-	_, err := r.db.ExecContext(ctx, query, normEmail, passwordHash, role)
+	_, err := r.db.ExecContext(ctx, query, name, normEmail, passwordHash, role)
 	return err
 }
 
@@ -158,7 +183,7 @@ func (r *UserRepository) CreateInitialUserIfNotExists(ctx context.Context, email
 // Şifre bilgisini içermeyen UserDTO (Veri Transfer Nesnesi) listesi döner.
 func (r *UserRepository) ListUsers(ctx context.Context) ([]*models.UserDTO, error) {
 	query := `
-		SELECT id, email, role, is_blocked, created_at, updated_at
+		SELECT id, name, email, role, is_blocked, created_at, updated_at
 		FROM users
 		ORDER BY id ASC
 	`
@@ -171,7 +196,7 @@ func (r *UserRepository) ListUsers(ctx context.Context) ([]*models.UserDTO, erro
 	var users []*models.UserDTO
 	for rows.Next() { // Dönen sonuç satırlarını tek tek dolaşır
 		var u models.UserDTO
-		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt); err != nil { // Sütun verilerini nesneye aktarır
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt); err != nil { // Sütun verilerini nesneye aktarır
 			return nil, err
 		}
 		users = append(users, &u) // Okunan kullanıcıyı listeye ekler

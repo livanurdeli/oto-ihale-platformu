@@ -85,9 +85,9 @@ func run() error {
 	// Development ortamında demo ve yönetici (admin) hesapları oluştur
 	if cfg.ServerEnv == "development" {
 		demoHash, _ := auth.HashPassword("Demo123!")
-		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "demo@aracihale.com", demoHash, "user")
+		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "Demo Kullanıcı", "demo@aracihale.com", demoHash, "user")
 		adminHash, _ := auth.HashPassword("Admin123!")
-		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "admin@aracihale.com", adminHash, "admin")
+		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "Yönetici", "admin@aracihale.com", adminHash, "admin")
 		log.Println("✅ [Development] Demo (demo@aracihale.com) ve Admin (admin@aracihale.com / Admin123!) hesapları kontrol edildi.")
 	}
 
