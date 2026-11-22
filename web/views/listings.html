@@ -19,7 +19,7 @@
     {{$isHome := index . "IsHome"}}
 
     <div class="hero-search-card">
-      <form method="GET" action="/listings" class="hero-unified-form">
+      <form method="GET" action="/listings#araclar" class="hero-unified-form">
         <!-- ÜST ARAMA ÇUBUĞU (MARKA, MODEL, ŞEHİR) -->
         <div class="hero-search-top-row">
           <div class="search-input-group">
@@ -122,11 +122,11 @@
           <h2 class="section-title">Seçkin Markaları Keşfedin</h2>
           <p class="section-sub">Türkiye'nin en çok tercih edilen seçkin otomobil üreticileri</p>
         </div>
-        <a href="/listings" class="section-link">Tüm Markalar ↗</a>
+        <a href="/listings#araclar" class="section-link">Tüm Markalar ↗</a>
       </div>
 
       <div class="brand-grid">
-        <a href="/listings?brand=Audi" class="brand-card {{if eq $filter.Brand "Audi"}}active{{end}}">
+        <a href="/listings?brand=Audi#araclar" class="brand-card {{if eq $filter.Brand "Audi"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- AUDI SVG -->
             <svg viewBox="0 0 100 40" class="brand-svg">
@@ -139,7 +139,7 @@
           <span class="brand-name">Audi</span>
         </a>
 
-        <a href="/listings?brand=BMW" class="brand-card {{if eq $filter.Brand "BMW"}}active{{end}}">
+        <a href="/listings?brand=BMW#araclar" class="brand-card {{if eq $filter.Brand "BMW"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- BMW SVG -->
             <svg viewBox="0 0 40 40" class="brand-svg">
@@ -152,7 +152,7 @@
           <span class="brand-name">BMW</span>
         </a>
 
-        <a href="/listings?brand=Mercedes" class="brand-card {{if eq $filter.Brand "Mercedes"}}active{{end}}">
+        <a href="/listings?brand=Mercedes#araclar" class="brand-card {{if eq $filter.Brand "Mercedes"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- MERCEDES SVG -->
             <svg viewBox="0 0 40 40" class="brand-svg">
@@ -165,7 +165,7 @@
           <span class="brand-name">Mercedes-Benz</span>
         </a>
 
-        <a href="/listings?brand=Volkswagen" class="brand-card {{if eq $filter.Brand "Volkswagen"}}active{{end}}">
+        <a href="/listings?brand=Volkswagen#araclar" class="brand-card {{if eq $filter.Brand "Volkswagen"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- VOLKSWAGEN SVG -->
             <svg viewBox="0 0 40 40" class="brand-svg">
@@ -177,7 +177,7 @@
           <span class="brand-name">Volkswagen</span>
         </a>
 
-        <a href="/listings?brand=Ford" class="brand-card {{if eq $filter.Brand "Ford"}}active{{end}}">
+        <a href="/listings?brand=Ford#araclar" class="brand-card {{if eq $filter.Brand "Ford"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- FORD SVG -->
             <svg viewBox="0 0 50 30" class="brand-svg">
@@ -188,7 +188,7 @@
           <span class="brand-name">Ford</span>
         </a>
 
-        <a href="/listings?brand=Toyota" class="brand-card {{if eq $filter.Brand "Toyota"}}active{{end}}">
+        <a href="/listings?brand=Toyota#araclar" class="brand-card {{if eq $filter.Brand "Toyota"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- TOYOTA SVG -->
             <svg viewBox="0 0 40 30" class="brand-svg">
@@ -200,7 +200,7 @@
           <span class="brand-name">Toyota</span>
         </a>
 
-        <a href="/listings?brand=Peugeot" class="brand-card {{if eq $filter.Brand "Peugeot"}}active{{end}}">
+        <a href="/listings?brand=Peugeot#araclar" class="brand-card {{if eq $filter.Brand "Peugeot"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- PEUGEOT SVG -->
             <svg viewBox="0 0 36 40" class="brand-svg">
@@ -211,7 +211,7 @@
           <span class="brand-name">Peugeot</span>
         </a>
 
-        <a href="/listings?brand=Renault" class="brand-card {{if eq $filter.Brand "Renault"}}active{{end}}">
+        <a href="/listings?brand=Renault#araclar" class="brand-card {{if eq $filter.Brand "Renault"}}active{{end}}">
           <div class="brand-logo-wrap">
             <!-- RENAULT SVG -->
             <svg viewBox="0 0 36 40" class="brand-svg">
@@ -228,7 +228,7 @@
 
     <!-- 2. ARAÇ LİSTESİ -->
     {{if not $isHome}}
-    <section class="section-vehicles">
+    <section id="araclar" class="section-vehicles">
       <div class="section-header">
         <div>
           <h2 class="section-title">Tüm Açık Artırma Araçları</h2>

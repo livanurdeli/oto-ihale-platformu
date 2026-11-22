@@ -178,7 +178,7 @@ func (c *ListingController) ListingDetailPage(w http.ResponseWriter, r *http.Req
 // ============================================================================
 
 func (c *ListingController) NewListingPage(w http.ResponseWriter, r *http.Request) {
-	data := NewViewData(r, "Yeni Açık Artırma İlanı", "listings")
+	data := NewViewData(r, "Fiyat Değerleme ve Yeni İlan", "valuation")
 	data.Data = map[string]interface{}{
 		"DamageStatuses": models.AllDamageStatuses,
 		"DamageLabel":    models.DamageStatusLabel,

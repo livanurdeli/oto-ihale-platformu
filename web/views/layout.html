@@ -23,7 +23,7 @@
         <ul class="nav-menu">
           <li><a href="/" class="nav-item {{if eq .ActiveNav "home"}}active{{end}}">Ana Sayfa</a></li>
           <li><a href="/listings" class="nav-item {{if eq .ActiveNav "listings"}}active{{end}}">Açık Artırmalar</a></li>
-          <li><a href="/listings/new" class="nav-item">Fiyat Değerleme</a></li>
+          <li><a href="/listings/new" class="nav-item {{if eq .ActiveNav "valuation"}}active{{end}}">Fiyat Değerleme</a></li>
           {{if .IsAuthenticated}}
             <li><a href="/my/bids" class="nav-item {{if eq .ActiveNav "my_bids"}}active{{end}}">Tekliflerim</a></li>
             <li><a href="/my/listings" class="nav-item {{if eq .ActiveNav "my_listings"}}active{{end}}">İlanlarım</a></li>

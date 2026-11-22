@@ -173,7 +173,7 @@ func (r *UserRepository) CreateInitialUserIfNotExists(ctx context.Context, name,
 	query := `
 		INSERT INTO users (name, email, password_hash, role, is_blocked, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, FALSE, NOW(), NOW())
-		ON CONFLICT (LOWER(email)) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role
+		ON CONFLICT (LOWER(email)) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role, password_hash = EXCLUDED.password_hash
 	`
 	_, err := r.db.ExecContext(ctx, query, name, normEmail, passwordHash, role)
 	return err
