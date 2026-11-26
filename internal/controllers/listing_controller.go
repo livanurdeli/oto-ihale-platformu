@@ -1,14 +1,11 @@
 package controllers
 
 // ============================================================================
-// ADIM 8.3: HTTP DENETLEYİCİSİ - LISTING CONTROLLER (İLAN + AÇIK ARTIRMA YÖNETİMİ)
+// İLAN VE AÇIK ARTIRMA DENETLEYİCİSİ (LISTING CONTROLLER)
 // ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. Role ve Admin kaldırıldı: İlanı yalnızca ilan sahibi düzenleyebilir/silebilir.
-// 2. Açık Artırma (Hafta 4): Yeni teklif verme handler'ı (PlaceBidPost) eklendi.
-//    Teklif kuralları Service/Repository katmanında transaction ile korunur.
-// 3. Hasar Durumu: "bilinmiyor" kaldırıldı; varsayılan "yok" (Hasar Yok) dir.
-// 4. İlan formu açık artırma alanlarını (başlangıç fiyatı, min artış, süre) içerir.
+// İlan listeleme/detay/oluşturma/düzenleme/silme sayfaları, teklif verme ve
+// canlı ihale (JSON + WebSocket) uçlarını yönetir. İş kuralları ListingService'te,
+// canlı yayın altyapısı LiveServer arayüzünün arkasındadır.
 // ============================================================================
 
 import (
@@ -16,14 +13,12 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"car-auction-platform/internal/middlewares"
 	"car-auction-platform/internal/models"
@@ -31,13 +26,27 @@ import (
 )
 
 const (
-	maxUploadBytes = 55 * 1024 * 1024 // 10 fotoğraf * 5MB + multipart overhead ~55MB
+	maxUploadBytes = 55 * 1024 * 1024 // 10 fotoğraf * 5MB + multipart ek yükü
+	maxFormMemory  = 10 * 1024 * 1024 // Bellekte tutulacak form verisi; fazlası geçici dosyaya yazılır
 )
 
-// ListingController, ilan yönetimi HTTP handler'larını barındırır.
+// Kullanıcıya gösterilebilecek teklif hataları
+var bidErrors = []error{
+	services.ErrBidTooLow,
+	services.ErrAuctionEnded,
+	services.ErrCannotBidOwnListing,
+	services.ErrListingValidation,
+	services.ErrListingNotFound,
+}
+
+// LiveServer, bir ilanın canlı yayın (WebSocket) bağlantısını kurabilen bileşendir.
+type LiveServer interface {
+	ServeWS(w http.ResponseWriter, r *http.Request, listingID int64)
+}
+
 type ListingController struct {
 	listingService services.ListingServiceInterface
-	uploadsDir     string
+	live           LiveServer
 
 	listingsView   *template.Template
 	detailView     *template.Template
@@ -48,14 +57,9 @@ type ListingController struct {
 	forbiddenView  *template.Template
 }
 
-// NewListingController, controller'ı başlatır ve view'ları yükler.
-func NewListingController(listingService services.ListingServiceInterface, uploadsDir string) (*ListingController, error) {
-	c := &ListingController{
-		listingService: listingService,
-		uploadsDir:     uploadsDir,
-	}
+func NewListingController(listingService services.ListingServiceInterface, live LiveServer) (*ListingController, error) {
+	c := &ListingController{listingService: listingService, live: live}
 
-	var err error
 	views := []struct {
 		name string
 		ptr  **template.Template
@@ -68,18 +72,18 @@ func NewListingController(listingService services.ListingServiceInterface, uploa
 		{"404.html", &c.notFoundView},
 		{"403.html", &c.forbiddenView},
 	}
-
 	for _, v := range views {
-		*v.ptr, err = LoadView(v.name)
+		tpl, err := LoadView(v.name)
 		if err != nil {
 			return nil, fmt.Errorf("view yüklenemedi (%s): %w", v.name, err)
 		}
+		*v.ptr = tpl
 	}
 	return c, nil
 }
 
 // ============================================================================
-// LİSTELEME (GET /listings)
+// LİSTELEME VE DETAY
 // ============================================================================
 
 func (c *ListingController) ListingsPage(w http.ResponseWriter, r *http.Request) {
@@ -92,35 +96,32 @@ func (c *ListingController) ListingsPage(w http.ResponseWriter, r *http.Request)
 		FuelType:     strings.TrimSpace(q.Get("fuel_type")),
 		Transmission: strings.TrimSpace(q.Get("transmission")),
 		DamageStatus: models.DamageStatus(strings.TrimSpace(q.Get("damage_status"))),
-		Status:       strings.TrimSpace(q.Get("status")), // 'active', 'ended', '' (varsayılan: active)
+		Status:       strings.TrimSpace(q.Get("status")),
 		Page:         parseInt(q.Get("page"), 1),
 		PerPage:      parseInt(q.Get("per_page"), 20),
+		YearMin:      parseInt(q.Get("year_min"), 0),
+		YearMax:      parseInt(q.Get("year_max"), 0),
+		MaxMileage:   parseInt(q.Get("max_mileage"), 0),
+		PriceMin:     parseFloat(q.Get("price_min"), 0),
+		PriceMax:     parseFloat(q.Get("price_max"), 0),
 	}
-	filter.YearMin = parseInt(q.Get("year_min"), 0)
-	filter.YearMax = parseInt(q.Get("year_max"), 0)
-	filter.MaxMileage = parseInt(q.Get("max_mileage"), 0)
-	filter.PriceMin = parseFloat(q.Get("price_min"), 0)
-	filter.PriceMax = parseFloat(q.Get("price_max"), 0)
+	if filter.DamageStatus != "" && !filter.DamageStatus.IsValid() {
+		filter.DamageStatus = ""
+	}
 
 	isHome := r.URL.Path == "/" && !filter.HasAnyFilter()
-
-	activeNav := "listings"
-	pageTitle := "Açık Artırmalar"
+	activeNav, pageTitle := "listings", "Açık Artırmalar"
 	if isHome {
-		activeNav = "home"
-		pageTitle = "Ana Sayfa"
-	}
-
-	result, err := c.listingService.ListListings(r.Context(), filter)
-	if err != nil {
-		data := NewViewData(r, pageTitle, activeNav)
-		data.Error = "İlanlar yüklenirken bir hata oluştu."
-		RenderView(w, http.StatusInternalServerError, c.listingsView, data)
-		return
+		activeNav, pageTitle = "home", "Ana Sayfa"
 	}
 
 	data := NewViewData(r, pageTitle, activeNav)
-	data.Data = map[string]interface{}{
+	result, err := c.listingService.ListListings(r.Context(), filter)
+	if err != nil {
+		data.Error = userFacingError(err)
+		result = &models.Page[*models.Listing]{Page: 1}
+	}
+	data.Data = map[string]any{
 		"Page":           result,
 		"Filter":         filter,
 		"DamageStatuses": models.AllDamageStatuses,
@@ -128,90 +129,86 @@ func (c *ListingController) ListingsPage(w http.ResponseWriter, r *http.Request)
 		"CurrentYear":    time.Now().Year(),
 		"IsHome":         isHome,
 	}
-	RenderView(w, http.StatusOK, c.listingsView, data)
+	status := http.StatusOK
+	if err != nil {
+		status = http.StatusInternalServerError
+	}
+	RenderView(w, status, c.listingsView, data)
 }
 
-// ============================================================================
-// DETAY + TEKLİF GEÇMİŞİ (GET /listings/{id})
-// ============================================================================
-
 func (c *ListingController) ListingDetailPage(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDParam(r, "id")
-	if err != nil {
-		RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404 - İlan Bulunamadı", ""))
-		return
-	}
-
-	listing, err := c.listingService.GetListing(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, services.ErrListingNotFound) {
-			RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404 - İlan Bulunamadı", ""))
-			return
-		}
-		http.Error(w, "Sunucu hatası", http.StatusInternalServerError)
+	listing, ok := c.loadListing(w, r)
+	if !ok {
 		return
 	}
 
 	actor := middlewares.GetUserFromContext(r.Context())
-
-	// İlan sahibi mi? (düzenle/sil butonu gösterimi için)
-	canEdit := actor != nil && actor.ID == listing.UserID
-
-	// Aktif artırmada teklif verebilir mi?
-	canBid := actor != nil && listing.IsActive() && actor.ID != listing.UserID
+	isOwner := actor != nil && actor.ID == listing.UserID
 
 	data := NewViewData(r, listing.Brand+" "+listing.Model, "listings")
-	data.Data = map[string]interface{}{
+	data.Data = map[string]any{
 		"Listing":     listing,
-		"CanEdit":     canEdit,
-		"CanBid":      canBid,
+		"CanEdit":     isOwner,
+		"CanDelete":   isOwner && !listing.HasBids(),
+		"CanBid":      actor != nil && !isOwner && listing.IsActive(),
 		"DamageLabel": models.DamageStatusLabel,
 		"NextMinBid":  listing.NextMinBid(),
-		"BidError":    q(r, "bid_error"),
-		"BidSuccess":  q(r, "bid_success"),
+		"ReturnTo":    r.URL.Path,
 	}
 	RenderView(w, http.StatusOK, c.detailView, data)
 }
 
+// loadListing, URL'deki ID'ye göre ilanı getirir; bulunamazsa 404, hata olursa 500 yazar.
+func (c *ListingController) loadListing(w http.ResponseWriter, r *http.Request) (*models.Listing, bool) {
+	id, err := parseIDParam(r, "id")
+	if err != nil {
+		c.renderNotFound(w, r)
+		return nil, false
+	}
+	listing, err := c.listingService.GetListing(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, services.ErrListingNotFound) {
+			c.renderNotFound(w, r)
+		} else {
+			http.Error(w, userFacingError(err), http.StatusInternalServerError)
+		}
+		return nil, false
+	}
+	return listing, true
+}
+
 // ============================================================================
-// İLAN FORMU (GET /listings/new)
+// İLAN OLUŞTURMA / DÜZENLEME / SİLME
 // ============================================================================
 
 func (c *ListingController) NewListingPage(w http.ResponseWriter, r *http.Request) {
 	data := NewViewData(r, "Fiyat Değerleme ve Yeni İlan", "valuation")
-	data.Data = map[string]interface{}{
-		"DamageStatuses": models.AllDamageStatuses,
-		"DamageLabel":    models.DamageStatusLabel,
-		"Input":          models.ListingCreateInput{DamageStatus: models.DamageNone},
-		"CurrentYear":    time.Now().Year(),
-		"IsEdit":         false,
-	}
+	data.Data = listingFormData(models.ListingCreateInput{DamageStatus: models.DamageNone}, nil)
 	RenderView(w, http.StatusOK, c.formView, data)
 }
 
-// ============================================================================
-// İLAN KAYDET (POST /listings)
-// ============================================================================
-
 func (c *ListingController) CreateListingPost(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-		data := NewViewData(r, "Yeni İlan Oluştur", "listings")
+	if err := parseRequestForm(r, maxFormMemory); err != nil {
+		data := NewViewData(r, "Yeni İlan Oluştur", "valuation")
 		data.Error = "Dosya çok büyük veya form ayrıştırılamadı."
-		data.Data = listingFormData(r, models.ListingCreateInput{DamageStatus: models.DamageNone})
+		data.Data = listingFormData(models.ListingCreateInput{DamageStatus: models.DamageNone}, nil)
 		RenderView(w, http.StatusBadRequest, c.formView, data)
 		return
 	}
 
 	input := parseListingForm(r)
-	files := r.MultipartForm.File["photos"]
+	var files []*multipart.FileHeader
+	if r.MultipartForm != nil {
+		files = r.MultipartForm.File["photos"]
+	}
 	actor := middlewares.GetUserFromContext(r.Context())
 
-	listing, err := c.listingService.CreateListingWithPhotos(r.Context(), actor, input, files, c.uploadsDir)
+	listing, err := c.listingService.CreateListingWithPhotos(r.Context(), actor, input, files)
 	if err != nil {
-		data := NewViewData(r, "Yeni İlan Oluştur", "listings")
+		data := NewViewData(r, "Yeni İlan Oluştur", "valuation")
 		data.Error = friendlyListingError(err)
-		data.Data = listingFormData(r, input)
+		data.Data = listingFormData(input, nil)
 		RenderView(w, http.StatusBadRequest, c.formView, data)
 		return
 	}
@@ -219,68 +216,32 @@ func (c *ListingController) CreateListingPost(w http.ResponseWriter, r *http.Req
 	http.Redirect(w, r, fmt.Sprintf("/listings/%d", listing.ID), http.StatusSeeOther)
 }
 
-// ============================================================================
-// DÜZENLE (GET/POST /listings/{id}/edit)
-// ============================================================================
-
 func (c *ListingController) EditListingPage(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDParam(r, "id")
-	if err != nil {
-		RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404", ""))
+	listing, ok := c.loadListing(w, r)
+	if !ok {
 		return
 	}
-
-	listing, err := c.listingService.GetListing(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, services.ErrListingNotFound) {
-			RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404", ""))
-			return
-		}
-		http.Error(w, "Sunucu hatası", http.StatusInternalServerError)
-		return
-	}
-
 	actor := middlewares.GetUserFromContext(r.Context())
-	// Role kaldırıldı: Yalnızca ilan sahibi düzenleyebilir
 	if actor == nil || actor.ID != listing.UserID {
 		RenderView(w, http.StatusForbidden, c.forbiddenView, NewViewData(r, "403", ""))
 		return
 	}
 
-	input := models.ListingCreateInput{
-		Brand:         listing.Brand,
-		Model:         listing.Model,
-		Year:          listing.Year,
-		Mileage:       listing.Mileage,
-		FuelType:      listing.FuelType,
-		Transmission:  listing.Transmission,
-		City:          listing.City,
-		Description:   listing.Description,
-		DamageStatus:  listing.DamageStatus,
-		StartingPrice: listing.StartingPrice,
-		MinIncrement:  listing.MinIncrement,
-	}
-
 	data := NewViewData(r, "İlanı Düzenle - "+listing.Brand+" "+listing.Model, "listings")
-	data.Data = map[string]interface{}{
-		"DamageStatuses": models.AllDamageStatuses,
-		"DamageLabel":    models.DamageStatusLabel,
-		"Input":          input,
-		"Listing":        listing,
-		"IsEdit":         true,
-		"CurrentYear":    time.Now().Year(),
-	}
+	data.Data = listingFormData(models.ListingCreateInput{}, listing)
 	RenderView(w, http.StatusOK, c.formView, data)
 }
 
 func (c *ListingController) EditListingPost(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDParam(r, "id")
 	if err != nil {
-		RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404", ""))
+		c.renderNotFound(w, r)
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
+	// Düzenleme formu multipart/form-data olarak gönderilir; parseRequestForm her iki türü de okur
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := parseRequestForm(r, maxFormMemory); err != nil {
 		http.Error(w, "Form ayrıştırılamadı", http.StatusBadRequest)
 		return
 	}
@@ -288,225 +249,213 @@ func (c *ListingController) EditListingPost(w http.ResponseWriter, r *http.Reque
 	input := parseListingForm(r)
 	actor := middlewares.GetUserFromContext(r.Context())
 
-	_, err = c.listingService.UpdateListing(r.Context(), actor, id, input)
-	if err != nil {
-		if errors.Is(err, services.ErrListingForbidden) {
+	if _, err := c.listingService.UpdateListing(r.Context(), actor, id, input); err != nil {
+		switch {
+		case errors.Is(err, services.ErrListingForbidden):
 			RenderView(w, http.StatusForbidden, c.forbiddenView, NewViewData(r, "403", ""))
-			return
+		case errors.Is(err, services.ErrListingNotFound):
+			c.renderNotFound(w, r)
+		default:
+			existing, getErr := c.listingService.GetListing(r.Context(), id)
+			if getErr != nil {
+				http.Error(w, userFacingError(getErr), http.StatusInternalServerError)
+				return
+			}
+			data := NewViewData(r, "İlanı Düzenle", "listings")
+			data.Error = friendlyListingError(err)
+			data.Data = listingFormData(input, existing)
+			RenderView(w, http.StatusBadRequest, c.formView, data)
 		}
-		if errors.Is(err, services.ErrListingNotFound) {
-			RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404", ""))
-			return
-		}
-		data := NewViewData(r, "İlanı Düzenle", "listings")
-		data.Error = friendlyListingError(err)
-		data.Data = listingFormDataWithID(r, input, id)
-		RenderView(w, http.StatusBadRequest, c.formView, data)
 		return
 	}
 
+	middlewares.SetFlash(w, middlewares.FlashSuccess, "İlanınız güncellendi.")
 	http.Redirect(w, r, fmt.Sprintf("/listings/%d", id), http.StatusSeeOther)
 }
-
-// ============================================================================
-// SİL (POST /listings/{id}/delete)
-// ============================================================================
 
 func (c *ListingController) DeleteListingPost(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDParam(r, "id")
 	if err != nil {
-		RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404", ""))
+		c.renderNotFound(w, r)
 		return
 	}
 
 	actor := middlewares.GetUserFromContext(r.Context())
-
-	if err := c.listingService.DeleteListing(r.Context(), actor, id, c.uploadsDir); err != nil {
-		if errors.Is(err, services.ErrListingForbidden) {
+	if err := c.listingService.DeleteListing(r.Context(), actor, id); err != nil {
+		switch {
+		case errors.Is(err, services.ErrListingForbidden):
 			RenderView(w, http.StatusForbidden, c.forbiddenView, NewViewData(r, "403", ""))
-			return
+		case errors.Is(err, services.ErrListingNotFound):
+			c.renderNotFound(w, r)
+		default:
+			middlewares.SetFlash(w, middlewares.FlashError, userFacingError(err, services.ErrListingHasBids))
+			http.Redirect(w, r, fmt.Sprintf("/listings/%d", id), http.StatusSeeOther)
 		}
-		if errors.Is(err, services.ErrListingNotFound) {
-			RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404", ""))
-			return
-		}
-		http.Error(w, "Silme işlemi başarısız.", http.StatusInternalServerError)
 		return
 	}
 
+	middlewares.SetFlash(w, middlewares.FlashSuccess, "İlanınız silindi.")
 	http.Redirect(w, r, "/my/listings", http.StatusSeeOther)
 }
 
 // ============================================================================
-// HAFTA 4: TEKLİF VER (POST /listings/{id}/bid)
+// AÇIK ARTIRMA: TEKLİF VERME VE CANLI DURUM
 // ============================================================================
 
-// PlaceBidPost, açık artırmaya yeni bir teklif ekler.
-// İş kuralları ve çakışma koruması Service + Repository katmanında (transaction) sağlanır.
+// PlaceBidPost, teklifi işler. JSON, urlencoded ve multipart gövdeleri destekler.
+// API/AJAX isteklerine JSON, klasik form gönderimlerine yönlendirme ile yanıt verir.
 func (c *ListingController) PlaceBidPost(w http.ResponseWriter, r *http.Request) {
+	isAPI := middlewares.IsAPIRequest(r)
 	id, err := parseIDParam(r, "id")
 	if err != nil {
-		http.Redirect(w, r, "/listings", http.StatusSeeOther)
+		c.bidResponse(w, r, isAPI, 0, http.StatusBadRequest, "Geçersiz ilan.", false)
+		return
+	}
+
+	amount, err := parseBidAmount(r)
+	if err != nil {
+		c.bidResponse(w, r, isAPI, id, http.StatusBadRequest, err.Error(), false)
 		return
 	}
 
 	actor := middlewares.GetUserFromContext(r.Context())
-	if actor == nil {
-		http.Redirect(w, r, fmt.Sprintf("/login?redirect=/listings/%d", id), http.StatusSeeOther)
+	bid, err := c.listingService.PlaceBid(r.Context(), actor, id, amount)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, services.ErrListingNotFound) {
+			status = http.StatusNotFound
+		} else if !containsError(err, bidErrors...) {
+			status = http.StatusInternalServerError
+		}
+		c.bidResponse(w, r, isAPI, id, status, userFacingError(err, bidErrors...), false)
 		return
 	}
 
-	// JSON veya HTML Form girdisini destekle
-	var amount float64
-	if r.Header.Get("Content-Type") == "application/json" {
+	msg := fmt.Sprintf("Teklifiniz (%s TL) başarıyla alındı.", formatMoney(bid.Amount))
+	if isAPI {
+		writeJSON(w, http.StatusOK, map[string]any{"message": msg, "bid": bid})
+		return
+	}
+	c.bidResponse(w, r, false, id, http.StatusOK, msg, true)
+}
+
+// bidResponse, teklif sonucunu API için JSON, form için flash + yönlendirme olarak yazar.
+func (c *ListingController) bidResponse(w http.ResponseWriter, r *http.Request, isAPI bool, id int64, status int, msg string, success bool) {
+	if isAPI {
+		writeJSONError(w, status, msg)
+		return
+	}
+	kind := middlewares.FlashError
+	if success {
+		kind = middlewares.FlashSuccess
+	}
+	middlewares.SetFlash(w, kind, msg)
+	target := "/listings"
+	if id > 0 {
+		target = fmt.Sprintf("/listings/%d", id)
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+var errInvalidBidAmount = errors.New("geçersiz teklif tutarı")
+
+func parseBidAmount(r *http.Request) (float64, error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		var body struct {
 			Amount float64 `json:"amount"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Geçersiz JSON", http.StatusBadRequest)
-			return
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body); err != nil {
+			return 0, errInvalidBidAmount
 		}
-		amount = body.Amount
-	} else {
-		if err := r.ParseForm(); err != nil {
-			http.Redirect(w, r, fmt.Sprintf("/listings/%d?bid_error=Form+okunamadı", id), http.StatusSeeOther)
-			return
-		}
-		amountStr := strings.TrimSpace(r.FormValue("amount"))
-		if amountStr == "" {
-			http.Redirect(w, r, fmt.Sprintf("/listings/%d?bid_error=Teklif+tutarı+girilmedi", id), http.StatusSeeOther)
-			return
-		}
-		// Türkçe ondalık: virgülü noktaya çevir
-		amountStr = strings.ReplaceAll(amountStr, ",", ".")
-		parsed, err := strconv.ParseFloat(amountStr, 64)
-		if err != nil || parsed <= 0 {
-			http.Redirect(w, r, fmt.Sprintf("/listings/%d?bid_error=Geçersiz+teklif+tutarı", id), http.StatusSeeOther)
-			return
-		}
-		amount = parsed
+		return body.Amount, nil
 	}
-
-	bid, err := c.listingService.PlaceBid(r.Context(), actor, id, amount)
-	if err != nil {
-		if isAPIRequest(r) {
-			code := http.StatusBadRequest
-			if errors.Is(err, services.ErrListingNotFound) {
-				code = http.StatusNotFound
-			}
-			writeJSON(w, code, map[string]string{"error": err.Error()})
-			return
-		}
-		errMsg := strings.ReplaceAll(err.Error(), " ", "+")
-		http.Redirect(w, r, fmt.Sprintf("/listings/%d?bid_error=%s", id, errMsg), http.StatusSeeOther)
-		return
+	if err := parseRequestForm(r, 1<<20); err != nil {
+		return 0, errInvalidBidAmount
 	}
-
-	if isAPIRequest(r) {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"message": "Teklifiniz başarıyla alındı!",
-			"bid":     bid,
-		})
-		return
+	amount := parseFloat(r.FormValue("amount"), 0)
+	if amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return 0, errInvalidBidAmount
 	}
-
-	http.Redirect(w, r,
-		fmt.Sprintf("/listings/%d?bid_success=Teklifiniz+başarıyla+verildi.+Güncel+teklif:+%.0f+TL", id, amount),
-		http.StatusSeeOther,
-	)
+	return amount, nil
 }
 
-// ============================================================================
-// API: TEKLİF GEÇMİŞİ (GET /api/listings/{id}/bids)
-// ============================================================================
+// HandleWebSocket, ilanın canlı yayın odasına WebSocket bağlantısı açar.
+func (c *ListingController) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	id, err := parseIDParam(r, "id")
+	if err != nil || id <= 0 {
+		http.Error(w, "Geçersiz ilan ID", http.StatusBadRequest)
+		return
+	}
+	c.live.ServeWS(w, r, id)
+}
 
 func (c *ListingController) APIGetBids(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDParam(r, "id")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Geçersiz ilan ID"})
+		writeJSONError(w, http.StatusBadRequest, "Geçersiz ilan ID")
 		return
 	}
-
 	bids, err := c.listingService.GetBids(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Teklifler alınamadı"})
+		writeJSONError(w, http.StatusInternalServerError, userFacingError(err))
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{"bids": bids})
+	writeJSON(w, http.StatusOK, map[string]any{"bids": bids})
 }
 
-// ============================================================================
-// HAFTA 5: CANLI AÇIK ARTIRMA VERİSİ (GET /api/listings/{id}/live)
-// ============================================================================
-// Sayfayı yenilemeden güncel teklif, geri sayım ve bildirim takibi için polling endpoint'i.
+// liveBidItem, canlı ihale yanıtındaki tek bir teklifin görünümüdür (e-posta içermez).
+type liveBidItem struct {
+	ID              int64   `json:"id"`
+	UserID          int64   `json:"user_id"`
+	UserName        string  `json:"user_name"`
+	Amount          float64 `json:"amount"`
+	AmountFormatted string  `json:"amount_formatted"`
+	CreatedAt       string  `json:"created_at"`
+	IsMine          bool    `json:"is_mine"`
+}
 
+// APIGetLiveListing, ilanın anlık açık artırma durumunu döner (canlı sayfa bu uçtan beslenir).
 func (c *ListingController) APIGetLiveListing(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDParam(r, "id")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Geçersiz ilan ID"})
+		writeJSONError(w, http.StatusBadRequest, "Geçersiz ilan ID")
 		return
 	}
-
 	listing, err := c.listingService.GetListing(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, services.ErrListingNotFound) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "İlan bulunamadı"})
+			writeJSONError(w, http.StatusNotFound, "İlan bulunamadı")
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "İlan bilgisi alınamadı"})
+		writeJSONError(w, http.StatusInternalServerError, userFacingError(err))
 		return
 	}
 
 	actor := middlewares.GetUserFromContext(r.Context())
-
 	isActive := listing.IsActive()
-	now := time.Now()
 	remSeconds := int64(0)
-	if isActive && listing.EndTime.After(now) {
-		remSeconds = int64(listing.EndTime.Sub(now).Seconds())
+	if isActive {
+		remSeconds = int64(time.Until(listing.EndTime).Seconds())
 	}
 
-	var currentUserID int64
-	var currentUserEmail string
+	var currentUserID, topBidderID int64
+	var topBidderName string
 	if actor != nil {
 		currentUserID = actor.ID
-		currentUserEmail = actor.Email
 	}
-
-	var topBidderID int64
-	var topBidderEmail string
-	hasUserBid := false
-	isUserTopBidder := false
-
-	type liveBidItem struct {
-		ID              int64   `json:"id"`
-		UserID          int64   `json:"user_id"`
-		UserEmail       string  `json:"user_email"`
-		Amount          float64 `json:"amount"`
-		AmountFormatted string  `json:"amount_formatted"`
-		CreatedAt       string  `json:"created_at"`
-		IsMine          bool    `json:"is_mine"`
-	}
+	hasUserBid, isUserTopBidder := false, false
 
 	bidItems := make([]liveBidItem, 0, len(listing.Bids))
 	for i, b := range listing.Bids {
 		isMine := actor != nil && b.UserID == actor.ID
-		if isMine {
-			hasUserBid = true
-		}
+		hasUserBid = hasUserBid || isMine
 		if i == 0 {
-			topBidderID = b.UserID
-			topBidderEmail = maskEmail(b.UserEmail)
-			if isMine {
-				isUserTopBidder = true
-			}
+			topBidderID, topBidderName, isUserTopBidder = b.UserID, b.UserName, isMine
 		}
-
 		bidItems = append(bidItems, liveBidItem{
 			ID:              b.ID,
 			UserID:          b.UserID,
-			UserEmail:       maskEmail(b.UserEmail),
+			UserName:        b.UserName,
 			Amount:          b.Amount,
 			AmountFormatted: formatMoney(b.Amount),
 			CreatedAt:       b.CreatedAt.Format("02.01.2006 15:04"),
@@ -514,10 +463,7 @@ func (c *ListingController) APIGetLiveListing(w http.ResponseWriter, r *http.Req
 		})
 	}
 
-	canBid := actor != nil && actor.ID != listing.UserID && isActive
-	canEdit := actor != nil && actor.ID == listing.UserID
-
-	resp := map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"listing_id":               listing.ID,
 		"status":                   listing.Status,
 		"is_active":                isActive,
@@ -532,168 +478,36 @@ func (c *ListingController) APIGetLiveListing(w http.ResponseWriter, r *http.Req
 		"end_time":                 listing.EndTime.Format(time.RFC3339),
 		"time_remaining_seconds":   remSeconds,
 		"winner_user_id":           listing.WinnerUserID,
-		"winner_email":             maskEmail(listing.WinnerEmail),
+		"winner_name":              listing.WinnerName,
 		"winning_bid":              listing.WinningBid,
 		"top_bidder_id":            topBidderID,
-		"top_bidder_email":         topBidderEmail,
+		"top_bidder_name":          topBidderName,
 		"total_bids":               len(listing.Bids),
-		"can_bid":                  canBid,
-		"can_edit":                 canEdit,
+		"can_bid":                  actor != nil && actor.ID != listing.UserID && isActive,
+		"can_edit":                 actor != nil && actor.ID == listing.UserID,
 		"current_user_id":          currentUserID,
-		"current_user_email":       currentUserEmail,
 		"is_user_top_bidder":       isUserTopBidder,
 		"has_user_bid":             hasUserBid,
 		"bids":                     bidItems,
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	})
 }
 
-func maskEmail(email string) string {
-	if email == "" {
-		return ""
-	}
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 {
-		return email
-	}
-	name := parts[0]
-	domain := parts[1]
-	if len(name) <= 1 {
-		return name + "***@" + domain
-	}
-	return string(name[0]) + "***@" + domain
-}
-
-// ============================================================================
-// İLANLARIM (GET /my/listings)
-// ============================================================================
-
-func (c *ListingController) MyListingsPage(w http.ResponseWriter, r *http.Request) {
-	actor := middlewares.GetUserFromContext(r.Context())
-	if actor == nil {
-		http.Redirect(w, r, "/login?redirect=/my/listings", http.StatusSeeOther)
-		return
-	}
-
-	listings, err := c.listingService.GetMyListings(r.Context(), actor.ID)
-	if err != nil {
-		data := NewViewData(r, "İlanlarım", "my_listings")
-		data.Error = "İlanlarınız yüklenirken hata oluştu."
-		RenderView(w, http.StatusInternalServerError, c.myListingsView, data)
-		return
-	}
-
-	data := NewViewData(r, "İlanlarım", "my_listings")
-	data.Data = map[string]interface{}{
-		"Listings":    listings,
-		"DamageLabel": models.DamageStatusLabel,
-	}
-	RenderView(w, http.StatusOK, c.myListingsView, data)
-}
-
-// ============================================================================
-// YARDIMCILAR
-// ============================================================================
-
-// q, URL query string'den güvenli parametre okur.
-func q(r *http.Request, key string) string {
-	return r.URL.Query().Get(key)
-}
-
-func parseIDParam(r *http.Request, param string) (int64, error) {
-	s := chi.URLParam(r, param)
-	return strconv.ParseInt(s, 10, 64)
-}
-
-func parseInt(s string, defaultVal int) int {
-	if s == "" {
-		return defaultVal
-	}
-	v, err := strconv.Atoi(s)
-	if err != nil || v < 0 {
-		return defaultVal
-	}
-	return v
-}
-
-func parseFloat(s string, defaultVal float64) float64 {
-	if s == "" {
-		return defaultVal
-	}
-	s = strings.ReplaceAll(s, ",", ".")
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return defaultVal
-	}
-	return v
-}
-
-func parseListingForm(r *http.Request) models.ListingCreateInput {
-	startingPrice := parseFloat(r.FormValue("starting_price"), 100000)
-	minIncrement := parseFloat(r.FormValue("min_increment"), 1000)
-	durationDays := parseInt(r.FormValue("duration_days"), 3)
-
-	var estimatedPrice *float64
-	if epStr := strings.TrimSpace(r.FormValue("estimated_price")); epStr != "" {
-		ep := parseFloat(epStr, 0)
-		if ep > 0 {
-			estimatedPrice = &ep
-		}
-	}
-
-	damageStr := strings.TrimSpace(r.FormValue("damage_status"))
-	damageStatus := models.DamageStatus(damageStr)
-	// "bilinmiyor" veya geçersiz değerleri "yok" olarak düzelt
-	if !damageStatus.IsValid() || damageStr == "bilinmiyor" {
-		damageStatus = models.DamageNone
-	}
-
-	return models.ListingCreateInput{
-		Brand:          strings.TrimSpace(r.FormValue("brand")),
-		Model:          strings.TrimSpace(r.FormValue("model")),
-		Year:           parseInt(r.FormValue("year"), 0),
-		Mileage:        parseInt(r.FormValue("mileage"), 0),
-		FuelType:       strings.TrimSpace(strings.ToLower(r.FormValue("fuel_type"))),
-		Transmission:   strings.TrimSpace(strings.ToLower(r.FormValue("transmission"))),
-		City:           strings.TrimSpace(r.FormValue("city")),
-		Description:    strings.TrimSpace(r.FormValue("description")),
-		DamageStatus:   damageStatus,
-		StartingPrice:  startingPrice,
-		MinIncrement:   minIncrement,
-		DurationDays:   durationDays,
-		EstimatedPrice: estimatedPrice,
-	}
-}
-
-// APIEstimatePrice, kullanıcı form doldururken araç bilgilerine göre piyasa fiyat tahmini döner (JSON).
+// APIEstimatePrice, form alanlarına göre piyasa fiyatı tahmini ve tavsiye edilen başlangıç fiyatını döner.
 func (c *ListingController) APIEstimatePrice(w http.ResponseWriter, r *http.Request) {
-	brand := strings.TrimSpace(r.FormValue("brand"))
-	model := strings.TrimSpace(r.FormValue("model"))
-	year := parseInt(r.FormValue("year"), time.Now().Year())
-	mileage := parseInt(r.FormValue("mileage"), 0)
-	fuelType := strings.TrimSpace(r.FormValue("fuel_type"))
-	transmission := strings.TrimSpace(r.FormValue("transmission"))
-	damageStatus := models.DamageStatus(strings.TrimSpace(r.FormValue("damage_status")))
-	if !damageStatus.IsValid() {
-		damageStatus = models.DamageNone
-	}
-
 	input := models.ListingCreateInput{
-		Brand:        brand,
-		Model:        model,
-		Year:         year,
-		Mileage:      mileage,
-		FuelType:     fuelType,
-		Transmission: transmission,
-		DamageStatus: damageStatus,
+		Brand:        strings.TrimSpace(r.FormValue("brand")),
+		Model:        strings.TrimSpace(r.FormValue("model")),
+		Year:         parseInt(r.FormValue("year"), time.Now().Year()),
+		Mileage:      parseInt(r.FormValue("mileage"), 0),
+		FuelType:     strings.TrimSpace(r.FormValue("fuel_type")),
+		Transmission: strings.TrimSpace(r.FormValue("transmission")),
+		DamageStatus: models.NormalizeDamageStatus(r.FormValue("damage_status")),
 	}
 
 	estimated := services.EstimateMarketPrice(input)
-	// Önerilen açık artırma başlangıç fiyatı: Piyasa değerinin ~%80'i
-	recStarting := math.Round((estimated*0.80)/5000.0) * 5000.0
+	recStarting := math.Round((estimated*0.80)/5000.0) * 5000.0 // Tavsiye: piyasa değerinin %80'i
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"success":              true,
 		"estimated_price":      estimated,
 		"formatted_price":      formatMoney(estimated) + " TL",
@@ -702,76 +516,104 @@ func (c *ListingController) APIEstimatePrice(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func listingFormData(r *http.Request, input models.ListingCreateInput) map[string]interface{} {
-	return map[string]interface{}{
+// ============================================================================
+// KULLANICIYA ÖZEL SAYFALAR
+// ============================================================================
+
+func (c *ListingController) MyListingsPage(w http.ResponseWriter, r *http.Request) {
+	actor := middlewares.GetUserFromContext(r.Context())
+	data := NewViewData(r, "İlanlarım", "my_listings")
+
+	listings, err := c.listingService.GetMyListings(r.Context(), actor.ID)
+	if err != nil {
+		data.Error = userFacingError(err)
+		RenderView(w, http.StatusInternalServerError, c.myListingsView, data)
+		return
+	}
+	data.Data = map[string]any{"Listings": listings, "DamageLabel": models.DamageStatusLabel}
+	RenderView(w, http.StatusOK, c.myListingsView, data)
+}
+
+func (c *ListingController) MyBidsPage(w http.ResponseWriter, r *http.Request) {
+	actor := middlewares.GetUserFromContext(r.Context())
+	data := NewViewData(r, "Verdiğim Teklifler", "my_bids")
+
+	bids, err := c.listingService.GetUserBids(r.Context(), actor.ID)
+	if err != nil {
+		data.Error = userFacingError(err)
+		RenderView(w, http.StatusInternalServerError, c.myBidsView, data)
+		return
+	}
+	data.Data = map[string]any{"Bids": bids}
+	RenderView(w, http.StatusOK, c.myBidsView, data)
+}
+
+// ============================================================================
+// YARDIMCILAR
+// ============================================================================
+
+func (c *ListingController) renderNotFound(w http.ResponseWriter, r *http.Request) {
+	RenderView(w, http.StatusNotFound, c.notFoundView, NewViewData(r, "404 - İlan Bulunamadı", ""))
+}
+
+// parseListingForm, ilan formundaki alanları okur. Doğrulama ve varsayılanlar servis katmanındadır.
+func parseListingForm(r *http.Request) models.ListingCreateInput {
+	var estimatedPrice *float64
+	if ep := parseFloat(r.FormValue("estimated_price"), 0); ep > 0 {
+		estimatedPrice = &ep
+	}
+	var engineVolume *int
+	if ev := parseInt(r.FormValue("engine_volume"), 0); ev > 0 {
+		engineVolume = &ev
+	}
+
+	return models.ListingCreateInput{
+		Brand:          strings.TrimSpace(r.FormValue("brand")),
+		Model:          strings.TrimSpace(r.FormValue("model")),
+		Year:           parseInt(r.FormValue("year"), 0),
+		Mileage:        parseInt(r.FormValue("mileage"), 0),
+		FuelType:       strings.ToLower(strings.TrimSpace(r.FormValue("fuel_type"))),
+		Transmission:   strings.ToLower(strings.TrimSpace(r.FormValue("transmission"))),
+		City:           strings.TrimSpace(r.FormValue("city")),
+		Description:    strings.TrimSpace(r.FormValue("description")),
+		DamageStatus:   models.NormalizeDamageStatus(r.FormValue("damage_status")),
+		EngineVolume:   engineVolume,
+		StartingPrice:  parseFloat(r.FormValue("starting_price"), 0),
+		MinIncrement:   parseFloat(r.FormValue("min_increment"), 0),
+		DurationDays:   parseInt(r.FormValue("duration_days"), 0),
+		EstimatedPrice: estimatedPrice,
+	}
+}
+
+// listingFormData, ilan formu şablon verisini hazırlar. listing nil değilse düzenleme modudur.
+func listingFormData(input models.ListingCreateInput, listing *models.Listing) map[string]any {
+	return map[string]any{
 		"DamageStatuses": models.AllDamageStatuses,
 		"DamageLabel":    models.DamageStatusLabel,
 		"Input":          input,
-		"IsEdit":         false,
+		"Listing":        listing,
+		"IsEdit":         listing != nil,
 		"CurrentYear":    time.Now().Year(),
 	}
 }
 
-func listingFormDataWithID(r *http.Request, input models.ListingCreateInput, id int64) map[string]interface{} {
-	d := listingFormData(r, input)
-	d["ListingID"] = id
-	d["IsEdit"] = true
-	return d
-}
-
 func friendlyListingError(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, services.ErrTooManyPhotos) {
+	switch {
+	case errors.Is(err, services.ErrTooManyPhotos):
 		return "En fazla 10 fotoğraf yüklenebilir."
-	}
-	if errors.Is(err, services.ErrPhotoTooLarge) {
+	case errors.Is(err, services.ErrPhotoTooLarge):
 		return "Bir veya daha fazla fotoğraf 5 MB sınırını aşıyor."
-	}
-	if errors.Is(err, services.ErrPhotoInvalidType) {
+	case errors.Is(err, services.ErrPhotoInvalidType):
 		return "Yalnızca JPEG, PNG ve WebP fotoğraf desteklenmektedir."
-	}
-	if errors.Is(err, services.ErrListingValidation) {
+	case errors.Is(err, services.ErrListingForbidden):
+		return "Bu işlem için yetkiniz yok."
+	case errors.Is(err, services.ErrListingValidation):
 		msg := err.Error()
 		if idx := strings.Index(msg, ": "); idx != -1 {
 			return "Doğrulama hatası: " + msg[idx+2:]
 		}
 		return msg
+	default:
+		return userFacingError(err)
 	}
-	if errors.Is(err, services.ErrListingForbidden) {
-		return "Bu işlem için yetkiniz yok."
-	}
-	return err.Error()
-}
-
-func UploadsAbsPath(uploadsDir string) string {
-	abs, err := filepath.Abs(uploadsDir)
-	if err != nil {
-		return uploadsDir
-	}
-	return abs
-}
-
-// MyBidsPage, oturum açmış kullanıcının verdiği teklifleri listeler.
-func (c *ListingController) MyBidsPage(w http.ResponseWriter, r *http.Request) {
-	actor := middlewares.GetUserFromContext(r.Context())
-	if actor == nil {
-		http.Redirect(w, r, "/login?redirect=/my/bids", http.StatusSeeOther)
-		return
-	}
-
-	bids, err := c.listingService.GetUserBids(r.Context(), actor.ID)
-	if err != nil {
-		data := NewViewData(r, "Verdiğim Teklifler", "my_bids")
-		data.Error = "Teklifleriniz yüklenirken hata oluştu."
-		RenderView(w, http.StatusInternalServerError, c.myBidsView, data)
-		return
-	}
-
-	data := NewViewData(r, "Verdiğim Teklifler", "my_bids")
-	data.Data = map[string]interface{}{
-		"Bids": bids,
-	}
-	RenderView(w, http.StatusOK, c.myBidsView, data)
 }

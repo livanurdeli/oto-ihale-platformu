@@ -69,7 +69,7 @@ func (r *SessionRepository) GetSession(ctx context.Context, token string) (*mode
 	// Oturum ve kullanıcı tablolarını birleştirerek (JOIN) yalnızca geçerli (expires_at > NOW()) oturumu getiren sorgu
 	query := `
 		SELECT s.token, s.user_id, s.expires_at, s.created_at,
-		       u.id, u.email, u.is_blocked, u.created_at, u.updated_at
+		       u.id, u.name, u.email, u.created_at, u.updated_at
 		FROM sessions s
 		JOIN users u ON s.user_id = u.id
 		WHERE s.token = $1 AND s.expires_at > NOW()
@@ -81,7 +81,7 @@ func (r *SessionRepository) GetSession(ctx context.Context, token string) (*mode
 	// Tek satırlık sonucu okuyup değişkenlerin bellek adreslerine eşler (Scan)
 	err := r.db.QueryRowContext(ctx, query, token).Scan(
 		&sess.Token, &sess.UserID, &sess.ExpiresAt, &sess.CreatedAt,
-		&u.ID, &u.Email, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
+		&u.ID, &u.Name, &u.Email, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		// Kayıt bulunamadığında sql.ErrNoRows hatasını yakalayıp özel oturum bulunamadı hatasını döner

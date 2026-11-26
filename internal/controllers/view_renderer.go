@@ -24,8 +24,9 @@ package controllers
 // 4. Standart Veri Aktarımı (ViewData):
 //    Denetleyiciden şablona gönderilen tüm bilgiler (sayfa başlığı, oturum açan kullanıcı,
 //    hata/başarı bildirimleri ve sayfaya özel modeller) tek bir ViewData nesnesinde toplanır.
-// 5. Rol ve Admin Yapısı:
-//    ViewData içerisindeki IsAdmin alanı kaldırılmıştır; tüm kullanıcılar standart üyedir.
+// 5. Bildirimler (Flash):
+//    Yönlendirme sonrası gösterilecek başarı/hata mesajları URL'den değil, flash
+//    çerezinden okunur; böylece sayfaya dışarıdan sahte mesaj yerleştirilemez.
 // ============================================================================
 
 import (
@@ -33,7 +34,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +65,8 @@ func NewViewData(r *http.Request, title, activeNav string) ViewData {
 		ActiveNav:       activeNav,
 		User:            user,
 		IsAuthenticated: isAuth,
+		Success:         middlewares.GetFlash(r.Context(), middlewares.FlashSuccess),
+		Error:           middlewares.GetFlash(r.Context(), middlewares.FlashError),
 	}
 }
 
@@ -158,9 +160,9 @@ func LoadView(viewFileName string) (*template.Template, error) {
 			if now.After(t) { // Bitiş zamanı geçmişse açık artırma tamamlanmıştır
 				return "Sona Erdi"
 			}
-			diff := t.Sub(now)              // Bitiş zamanı ile şu an arasındaki fark (kalan süre)
-			days := int(diff.Hours()) / 24  // Toplam saati güne bölerek gün sayısını bul
-			hours := int(diff.Hours()) % 24 // Güne bölünemeyen arta kalan saat miktarı
+			diff := t.Sub(now)               // Bitiş zamanı ile şu an arasındaki fark (kalan süre)
+			days := int(diff.Hours()) / 24   // Toplam saati güne bölerek gün sayısını bul
+			hours := int(diff.Hours()) % 24  // Güne bölünemeyen arta kalan saat miktarı
 			mins := int(diff.Minutes()) % 60 // Saate bölünemeyen arta kalan dakika miktarı
 			if days > 0 {
 				return fmt.Sprintf("%d gün %d saat", days, hours)
@@ -199,46 +201,8 @@ func LoadView(viewFileName string) (*template.Template, error) {
 			return pages
 		},
 		// buildQuery, filtreleme parametrelerini ve hedef sayfa numarasını URL sorgu dizesine (query string) dönüştürür
-		"buildQuery": func(filter interface{}, targetPage int) string {
-			v := url.Values{}                            // URL sorgu parametrelerini (query string) tutan yapı
-			v.Set("page", fmt.Sprintf("%d", targetPage)) // Hedef sayfa numarasını sorgu parametresi olarak ekle
-
-			var f *models.ListingFilter
-			// Filtre parametresinin doğrudan değer mi yoksa işaretçi mi olduğunu denetle (tip dönüştürme)
-			if direct, ok := filter.(models.ListingFilter); ok {
-				f = &direct
-			} else if ptr, ok := filter.(*models.ListingFilter); ok {
-				f = ptr
-			}
-
-			// Filtre alanları doluysa URL sorgu parametrelerine ekle
-			if f != nil {
-				if f.Brand != "" {
-					v.Set("brand", f.Brand)
-				}
-				if f.Model != "" {
-					v.Set("model", f.Model)
-				}
-				if f.City != "" {
-					v.Set("city", f.City)
-				}
-				if f.YearMin > 0 {
-					v.Set("year_min", fmt.Sprintf("%d", f.YearMin))
-				}
-				if f.YearMax > 0 {
-					v.Set("year_max", fmt.Sprintf("%d", f.YearMax))
-				}
-				if f.MaxMileage > 0 {
-					v.Set("max_mileage", fmt.Sprintf("%d", f.MaxMileage))
-				}
-				if f.FuelType != "" {
-					v.Set("fuel_type", f.FuelType)
-				}
-				if f.DamageStatus != "" {
-					v.Set("damage_status", string(f.DamageStatus))
-				}
-			}
-			return v.Encode() // Parametreleri standart URL formatına kodla (örn: brand=BMW&page=2)
+		"buildQuery": func(filter models.ListingFilter, targetPage int) string {
+			return filter.QueryValues(targetPage).Encode() // Tüm filtreler korunarak sayfa bağlantısı üretilir
 		},
 	}
 
@@ -264,8 +228,8 @@ func formatMoney(f float64) string {
 
 // RenderView, HTTP yanıt başlıklarını ayarlar, durum kodunu yazar ve derlenmiş HTML şablonunu istemciye gönderir.
 func RenderView(w http.ResponseWriter, statusCode int, tpl *template.Template, data ViewData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8") // Yanıt içeriğinin UTF-8 kodlamasında HTML olduğunu belirt
-	w.WriteHeader(statusCode)                                  // HTTP yanıt durum kodunu (örn: 200 OK, 404 Not Found) başlığa yaz
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")          // Yanıt içeriğinin UTF-8 kodlamasında HTML olduğunu belirt
+	w.WriteHeader(statusCode)                                           // HTTP yanıt durum kodunu (örn: 200 OK, 404 Not Found) başlığa yaz
 	if err := tpl.ExecuteTemplate(w, "layout.html", data); err != nil { // Şablonu veriyle işleyip HTTP yanıtına yaz
 		log.Printf("❌ Şablon render hatası (%s): %v", data.Title, err) // Hata oluşursa konsola hata kaydı düş
 	}

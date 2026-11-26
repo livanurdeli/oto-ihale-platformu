@@ -4,12 +4,34 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"mime/multipart"
 	"testing"
 	"time"
 
+	"car-auction-platform/internal/events"
 	"car-auction-platform/internal/models"
 	"car-auction-platform/internal/services"
 )
+
+// mockPhotoStorage, fotoğraf deposunun sahte uygulamasıdır.
+type mockPhotoStorage struct{ deleted []string }
+
+func (m *mockPhotoStorage) Validate(*multipart.FileHeader) error { return nil }
+func (m *mockPhotoStorage) Save(*multipart.FileHeader) (string, error) {
+	return "/uploads/test.jpg", nil
+}
+func (m *mockPhotoStorage) Delete(url string) error {
+	m.deleted = append(m.deleted, url)
+	return nil
+}
+
+// recordingPublisher, yayınlanan olayları kaydeder.
+type recordingPublisher struct{ events []events.Event }
+
+func (p *recordingPublisher) Publish(_ context.Context, e events.Event) error {
+	p.events = append(p.events, e)
+	return nil
+}
 
 // ============================================================================
 // MOCK REPOSITORY (Hafta 4 güncel - Açık Artırma Destekli)
@@ -51,10 +73,7 @@ func (m *mockListingRepo) CreateListing(ctx context.Context, tx *sql.Tx, input m
 	if minIncrement <= 0 {
 		minIncrement = 1000
 	}
-	endTime := time.Now().Add(3 * 24 * time.Hour)
-	if !input.EndTime.IsZero() {
-		endTime = input.EndTime
-	}
+	endTime := input.EndTime
 
 	l := &models.Listing{
 		ID:            id,
@@ -131,6 +150,10 @@ func (m *mockListingRepo) UpdateListing(ctx context.Context, id int64, input mod
 	l.City = input.City
 	l.Description = input.Description
 	l.DamageStatus = input.DamageStatus
+	l.EngineVolume = input.EngineVolume
+	l.StartingPrice = input.StartingPrice
+	l.MinIncrement = input.MinIncrement
+	l.EstimatedPrice = input.EstimatedPrice
 	l.UpdatedAt = time.Now()
 	return l, nil
 }
@@ -145,14 +168,6 @@ func (m *mockListingRepo) DeleteListing(ctx context.Context, id int64) error {
 
 func (m *mockListingRepo) GetPhotosByListingID(ctx context.Context, listingID int64) ([]models.ListingPhoto, error) {
 	return m.photos[listingID], nil
-}
-
-func (m *mockListingRepo) DeletePhoto(ctx context.Context, photoID int64) (*models.ListingPhoto, error) {
-	return &models.ListingPhoto{ID: photoID}, nil
-}
-
-func (m *mockListingRepo) CountPhotosByListingID(ctx context.Context, listingID int64) (int, error) {
-	return len(m.photos[listingID]), nil
 }
 
 // PlaceBid - basit mock implementasyonu
@@ -190,15 +205,15 @@ func (m *mockListingRepo) GetBidsByUserID(ctx context.Context, userID int64) ([]
 	return nil, nil
 }
 
-func (m *mockListingRepo) CloseExpiredAuctions(ctx context.Context) (int, error) {
-	count := 0
+func (m *mockListingRepo) CloseExpiredAuctions(ctx context.Context) ([]int64, error) {
+	var ids []int64
 	for _, l := range m.listings {
 		if l.Status == "active" && time.Now().After(l.EndTime) {
 			l.Status = "ended"
-			count++
+			ids = append(ids, l.ID)
 		}
 	}
-	return count, nil
+	return ids, nil
 }
 
 // ============================================================================
@@ -227,9 +242,15 @@ func newTestListingInput() models.ListingCreateInput {
 }
 
 func newTestService() (*services.ListingService, *mockListingRepo) {
-	repo := newMockListingRepo()
-	svc := services.NewListingService(repo)
+	svc, repo, _, _ := newTestServiceWithDeps()
 	return svc, repo
+}
+
+func newTestServiceWithDeps() (*services.ListingService, *mockListingRepo, *mockPhotoStorage, *recordingPublisher) {
+	repo := newMockListingRepo()
+	photos := &mockPhotoStorage{}
+	pub := &recordingPublisher{}
+	return services.NewListingService(repo, photos, pub), repo, photos, pub
 }
 
 // ============================================================================
@@ -241,7 +262,7 @@ func TestCreateListing_ValidInput(t *testing.T) {
 	actor := newTestActor(1)
 	input := newTestListingInput()
 
-	listing, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	listing, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil)
 	if err != nil {
 		t.Fatalf("Geçerli ilan oluşturulamamadı: %v", err)
 	}
@@ -259,7 +280,7 @@ func TestCreateListing_MissingBrand(t *testing.T) {
 	input := newTestListingInput()
 	input.Brand = ""
 
-	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil)
 	if !errors.Is(err, services.ErrListingValidation) {
 		t.Errorf("ErrListingValidation bekleniyordu, alınan: %v", err)
 	}
@@ -271,7 +292,7 @@ func TestCreateListing_InvalidFuelType(t *testing.T) {
 	input := newTestListingInput()
 	input.FuelType = "petrole"
 
-	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil)
 	if !errors.Is(err, services.ErrListingValidation) {
 		t.Errorf("ErrListingValidation bekleniyordu, alınan: %v", err)
 	}
@@ -279,7 +300,7 @@ func TestCreateListing_InvalidFuelType(t *testing.T) {
 
 func TestCreateListing_NilActor(t *testing.T) {
 	svc, _ := newTestService()
-	_, err := svc.CreateListingWithPhotos(context.Background(), nil, newTestListingInput(), nil, t.TempDir())
+	_, err := svc.CreateListingWithPhotos(context.Background(), nil, newTestListingInput(), nil)
 	if !errors.Is(err, services.ErrListingForbidden) {
 		t.Errorf("ErrListingForbidden bekleniyordu, alınan: %v", err)
 	}
@@ -294,7 +315,7 @@ func TestPlaceBid_Success(t *testing.T) {
 	owner := newTestActor(1)
 	bidder := newTestActor(2)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
 
 	bid, err := svc.PlaceBid(context.Background(), bidder, listing.ID, 500000)
 	if err != nil {
@@ -309,7 +330,7 @@ func TestPlaceBid_CannotBidOwnListing(t *testing.T) {
 	svc, _ := newTestService()
 	owner := newTestActor(1)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
 
 	// İlan sahibi kendi ilanına teklif veremelidir
 	_, err := svc.PlaceBid(context.Background(), owner, listing.ID, 500000)
@@ -324,7 +345,7 @@ func TestPlaceBid_TooLow(t *testing.T) {
 	bidder1 := newTestActor(2)
 	bidder2 := newTestActor(3)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
 
 	// İlk teklif: 500.000 TL (başlangıç fiyatında)
 	_, err := svc.PlaceBid(context.Background(), bidder1, listing.ID, 500000)
@@ -357,7 +378,7 @@ func TestPlaceBid_AuctionEnded(t *testing.T) {
 	bidder := newTestActor(2)
 
 	input := newTestListingInput()
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, input, nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, input, nil)
 
 	// İlanı manuel olarak bitir
 	listing.Status = "ended"
@@ -372,7 +393,7 @@ func TestPlaceBid_NilActor(t *testing.T) {
 	svc, _ := newTestService()
 	owner := newTestActor(1)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
 
 	_, err := svc.PlaceBid(context.Background(), nil, listing.ID, 500000)
 	if !errors.Is(err, services.ErrListingForbidden) {
@@ -388,9 +409,9 @@ func TestDeleteListing_OwnerCanDelete(t *testing.T) {
 	svc, _ := newTestService()
 	actor := newTestActor(1)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, newTestListingInput(), nil)
 
-	err := svc.DeleteListing(context.Background(), actor, listing.ID, t.TempDir())
+	err := svc.DeleteListing(context.Background(), actor, listing.ID)
 	if err != nil {
 		t.Errorf("İlan sahibi kendi ilanını silebilmelidir, hata: %v", err)
 	}
@@ -401,9 +422,9 @@ func TestDeleteListing_OtherUserCannotDelete(t *testing.T) {
 	owner := newTestActor(1)
 	otherUser := newTestActor(2)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
 
-	err := svc.DeleteListing(context.Background(), otherUser, listing.ID, t.TempDir())
+	err := svc.DeleteListing(context.Background(), otherUser, listing.ID)
 	if !errors.Is(err, services.ErrListingForbidden) {
 		t.Errorf("Başka kullanıcı ilanı silememeli: ErrListingForbidden beklendi, alınan: %v", err)
 	}
@@ -414,7 +435,7 @@ func TestUpdateListing_OwnerCanUpdate(t *testing.T) {
 	actor := newTestActor(1)
 	input := newTestListingInput()
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, input, nil)
 
 	input.Brand = "Mercedes"
 	updated, err := svc.UpdateListing(context.Background(), actor, listing.ID, input)
@@ -431,7 +452,7 @@ func TestUpdateListing_OtherUserCannotUpdate(t *testing.T) {
 	owner := newTestActor(1)
 	otherUser := newTestActor(2)
 
-	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil, t.TempDir())
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
 
 	input := newTestListingInput()
 	_, err := svc.UpdateListing(context.Background(), otherUser, listing.ID, input)
@@ -444,6 +465,91 @@ func TestUpdateListing_OtherUserCannotUpdate(t *testing.T) {
 // HASAR DURUMU TESTİ
 // ============================================================================
 
+func TestPlaceBid_PublishesEvent(t *testing.T) {
+	svc, _, _, pub := newTestServiceWithDeps()
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), newTestActor(1), newTestListingInput(), nil)
+
+	if _, err := svc.PlaceBid(context.Background(), newTestActor(2), listing.ID, 500000); err != nil {
+		t.Fatalf("Teklif reddedildi: %v", err)
+	}
+	if len(pub.events) != 1 || pub.events[0].Type != events.TypeNewBid || pub.events[0].ListingID != listing.ID {
+		t.Errorf("NEW_BID olayı yayınlanmalıydı, alınan: %+v", pub.events)
+	}
+}
+
+func TestDeleteListing_WithBidsIsRejected(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
+	_, _ = svc.PlaceBid(context.Background(), newTestActor(2), listing.ID, 500000)
+
+	if err := svc.DeleteListing(context.Background(), owner, listing.ID); !errors.Is(err, services.ErrListingHasBids) {
+		t.Errorf("ErrListingHasBids bekleniyordu, alınan: %v", err)
+	}
+}
+
+func TestDeleteListing_RemovesPhotos(t *testing.T) {
+	svc, repo, photos, _ := newTestServiceWithDeps()
+	owner := newTestActor(1)
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
+	repo.photos[listing.ID] = []models.ListingPhoto{{PhotoURL: "/uploads/a.jpg"}}
+
+	if err := svc.DeleteListing(context.Background(), owner, listing.ID); err != nil {
+		t.Fatalf("Silme başarısız: %v", err)
+	}
+	if len(photos.deleted) != 1 || photos.deleted[0] != "/uploads/a.jpg" {
+		t.Errorf("Fotoğraf depodan silinmeliydi, silinen: %v", photos.deleted)
+	}
+}
+
+func TestUpdateListing_SavesPricesAndEngineVolume(t *testing.T) {
+	svc, _ := newTestService()
+	actor := newTestActor(1)
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), actor, newTestListingInput(), nil)
+
+	input := newTestListingInput()
+	input.StartingPrice = 600000
+	input.MinIncrement = 5000
+	ev := 1598
+	input.EngineVolume = &ev
+
+	updated, err := svc.UpdateListing(context.Background(), actor, listing.ID, input)
+	if err != nil {
+		t.Fatalf("Güncelleme başarısız: %v", err)
+	}
+	if updated.StartingPrice != 600000 || updated.MinIncrement != 5000 || updated.EngineVolume == nil || *updated.EngineVolume != 1598 {
+		t.Errorf("Fiyat ve motor hacmi güncellenmeliydi: %+v", updated)
+	}
+}
+
+func TestUpdateListing_PriceChangeAfterBidRejected(t *testing.T) {
+	svc, _ := newTestService()
+	owner := newTestActor(1)
+	listing, _ := svc.CreateListingWithPhotos(context.Background(), owner, newTestListingInput(), nil)
+	_, _ = svc.PlaceBid(context.Background(), newTestActor(2), listing.ID, 500000)
+
+	input := newTestListingInput()
+	input.StartingPrice = 1
+	if _, err := svc.UpdateListing(context.Background(), owner, listing.ID, input); !errors.Is(err, services.ErrListingValidation) {
+		t.Errorf("Teklif sonrası fiyat değişikliği reddedilmeliydi, alınan: %v", err)
+	}
+}
+
+func TestAuctionCloser_PublishesEndedEvents(t *testing.T) {
+	repo := newMockListingRepo()
+	repo.listings[7] = &models.Listing{ID: 7, Status: "active", EndTime: time.Now().Add(-time.Minute)}
+	repo.listings[8] = &models.Listing{ID: 8, Status: "active", EndTime: time.Now().Add(time.Hour)}
+	pub := &recordingPublisher{}
+
+	count, err := services.NewAuctionCloserService(repo, pub).CloseExpiredAuctions(context.Background())
+	if err != nil || count != 1 {
+		t.Fatalf("1 ihale kapanmalıydı: count=%d err=%v", count, err)
+	}
+	if len(pub.events) != 1 || pub.events[0].Type != events.TypeAuctionEnded || pub.events[0].ListingID != 7 {
+		t.Errorf("AUCTION_ENDED olayı yayınlanmalıydı: %+v", pub.events)
+	}
+}
+
 func TestCreateListing_UnknownDamageDefaultsToNone(t *testing.T) {
 	svc, repo := newTestService()
 	actor := newTestActor(1)
@@ -451,7 +557,7 @@ func TestCreateListing_UnknownDamageDefaultsToNone(t *testing.T) {
 	// "bilinmiyor" artık geçerli değil; servis "yok"a çevirmelidir
 	input.DamageStatus = models.DamageStatus("bilinmiyor")
 
-	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil, t.TempDir())
+	_, err := svc.CreateListingWithPhotos(context.Background(), actor, input, nil)
 	// Service validation "bilinmiyor" değerini DamageNone'a düzeltir
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)

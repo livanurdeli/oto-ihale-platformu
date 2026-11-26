@@ -52,13 +52,13 @@
       <div class="form-row">
         <div class="form-group">
           <label for="starting_price">Başlangıç Fiyatı (TL) *</label>
-          <input type="number" id="starting_price" name="starting_price" required min="1000" step="500" placeholder="ör. 250000"
+          <input type="number" id="starting_price" name="starting_price" required {{if and $isEdit $listing.HasBids}}readonly title="Teklif almış ilanın fiyat koşulları değiştirilemez"{{end}} min="1000" step="500" placeholder="ör. 250000"
                  value="{{if $isEdit}}{{formatInputPrice $listing.StartingPrice}}{{else if $input.StartingPrice}}{{formatInputPrice $input.StartingPrice}}{{else}}100000{{end}}">
           <small style="color:#64748b;">Açık artırmanın başlayacağı taban teklif tutarı.</small>
         </div>
         <div class="form-group">
           <label for="min_increment">Minimum Teklif Artışı (TL) *</label>
-          <input type="number" id="min_increment" name="min_increment" required min="100" step="100" placeholder="ör. 2500"
+          <input type="number" id="min_increment" name="min_increment" required {{if and $isEdit $listing.HasBids}}readonly title="Teklif almış ilanın fiyat koşulları değiştirilemez"{{end}} min="100" step="100" placeholder="ör. 2500"
                  value="{{if $isEdit}}{{formatInputPrice $listing.MinIncrement}}{{else if $input.MinIncrement}}{{formatInputPrice $input.MinIncrement}}{{else}}1000{{end}}">
           <small style="color:#64748b;">Her yeni teklifin bir öncekinden en az ne kadar yüksek olması gerektiği.</small>
         </div>

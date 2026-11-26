@@ -1,183 +1,137 @@
 package middlewares
 
 // ============================================================================
-// GENEL BAKIŞ & DOSYANIN AMACI:
-// Bu dosya, web uygulamasına gelen HTTP isteklerinin oturum (session) ve yetki
-// denetimlerini gerçekleştiren ara katman (middleware) fonksiyonlarını içerir.
-//
-// Temel Görevleri:
-// 1. İsteklerdeki (request) oturum çerezini (cookie) veya başlığını (header) okumak.
-// 2. Oturumun geçerliliğini veritabanı üzerinden doğrulamak (Authentication - Kimlik Doğrulama).
-// 3. Doğrulanmış kullanıcıyı Go'nun istek bağlamına (context) ekleyerek sonraki
-//    işleyicilerin (handlers/controllers) kullanımına sunmak.
-// 4. Sayfaları ve API uç noktalarını korumak; oturum açmamış veya yetkisiz (admin olmayan)
-//    kullanıcıları engellemek ya da ilgili sayfalara yönlendirmek (Authorization - Yetkilendirme).
+// OTURUM (SESSION) ARA KATMANLARI
 // ============================================================================
-// ADIM 7: ARA KATMAN (MIDDLEWARE) & VERİTABANI TABANLI OTURUM (SESSION) KONTROLÜ
-// ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. JWT Kapatıldı -> Session Tabanlı Oturuma Geçildi:
-//    Her istekte 'session_token' çerezi (veya 'Authorization: Bearer <token>' başlığı)
-//    okunur ve veritabanından oturumun geçerliliği sorgulanır.
-// 2. Rol Tabanlı Yetkilendirme:
-//    Kullanıcıların admin yetkisi kontrol edilerek korumalı alanlara erişim sınırlandırılır.
-// 3. İstek Bağlamı (Request Context):
-//    Doğrulanan kullanıcı nesnesi Go'nun 'r.Context()' yapısına eklenir.
+// 1. Her istekte 'session_token' çerezi (veya 'Authorization: Bearer <token>'
+//    başlığı) okunur ve oturum veritabanından doğrulanır.
+// 2. Doğrulanan kullanıcı r.Context() içine eklenir.
+// 3. RequireAuth, yalnızca oturum açmış kullanıcıların erişebileceği
+//    sayfaları ve API uç noktalarını korur.
+// Platformda rol/yönetici yoktur; tüm kullanıcılar aynı yetkilere sahiptir.
 // ============================================================================
 
 import (
 	"context"
 	"net/http"
-	"os"
+	"net/url"
 	"strings"
 	"time"
 
 	"car-auction-platform/internal/models"
-	"car-auction-platform/internal/services"
 )
 
-// contextKey, context (istek bağlamı) içinde veri saklarken diğer paketlerle
-// anahtar çakışmasını (key collision) önlemek için tanımlanmış özel string türüdür.
 type contextKey string
 
 const (
-	// UserContextKey, doğrulanmış kullanıcı nesnesini (UserDTO) context içinde saklamak ve okumak için kullanılan benzersiz anahtardır.
-	UserContextKey    contextKey = "authenticated_user"
-	// SessionCookieName, istemci tarayıcısında oturum anahtarını (token) saklayan HTTP çerezinin adıdır.
-	SessionCookieName            = "session_token"
+	// UserContextKey, doğrulanmış kullanıcının (UserDTO) context içindeki anahtarıdır.
+	UserContextKey contextKey = "authenticated_user"
+	// SessionCookieName, oturum belirtecini saklayan çerezin adıdır.
+	SessionCookieName = "session_token"
 )
 
-// SessionMiddleware, gelen her HTTP isteğini karşılayan ana oturum ara katmanıdır.
-// İstekten oturum belirtecini (token) okur, veritabanından geçerliliğini kontrol eder
-// ve oturum geçerliyse kullanıcı bilgilerini sonraki işleyicilerin erişebilmesi için istek bağlamına (context) ekler.
-func SessionMiddleware(authService services.AuthServiceInterface) func(http.Handler) http.Handler {
+// SessionValidator, oturum ara katmanının ihtiyaç duyduğu tek yetenektir (ISP).
+type SessionValidator interface {
+	ValidateSession(ctx context.Context, token string) (*models.UserDTO, error)
+}
+
+// SessionMiddleware, istekteki oturumu doğrular ve geçerliyse kullanıcıyı context'e ekler.
+func SessionMiddleware(validator SessionValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tokenString := extractToken(r) // İstekten çerez veya Authorization başlığı aracılığıyla oturum belirtecini çıkarır
-			if tokenString == "" {
-				next.ServeHTTP(w, r) // Belirteç bulunamadıysa anonim (giriş yapmamış) kullanıcı olarak akışa devam et
+			token := ExtractToken(r)
+			if token == "" {
+				next.ServeHTTP(w, r)
 				return
 			}
 
-			userDTO, err := authService.ValidateSession(r.Context(), tokenString) // Veritabanından oturumu sorgulayarak kullanıcıyı doğrula
-			if err != nil || userDTO == nil || userDTO.IsBlocked {
-				// Oturum geçersiz, süresi dolmuş veya kullanıcı engellenmişse tarayıcıdaki geçersiz çerezi temizle
-				clearAuthCookie(w)
-				next.ServeHTTP(w, r) // İsteği anonim kullanıcı olarak işlemeye devam et
+			user, err := validator.ValidateSession(r.Context(), token)
+			if err != nil || user == nil {
+				// Geçersiz veya süresi dolmuş çerezi temizle, anonim olarak devam et
+				ClearAuthCookie(w)
+				next.ServeHTTP(w, r)
 				return
 			}
 
-			// Doğrulanmış güvenli kullanıcı nesnesini (UserDTO) istek bağlamına (context) yerleştir
-			ctx := context.WithValue(r.Context(), UserContextKey, userDTO)
-			next.ServeHTTP(w, r.WithContext(ctx)) // Güncellenmiş bağlam ile zincirdeki bir sonraki ara katmana veya işleyiciye geç
+			ctx := context.WithValue(r.Context(), UserContextKey, user)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// GetUserFromContext, istek bağlamı (context) içerisinden doğrulanmış kullanıcı bilgilerini güvenli bir şekilde çeker.
-// Kullanıcı oturum açmamışsa veya bağlamda kullanıcı bulunamazsa nil döndürür.
+// GetUserFromContext, context'teki doğrulanmış kullanıcıyı döner; yoksa nil.
 func GetUserFromContext(ctx context.Context) *models.UserDTO {
 	if ctx == nil {
 		return nil
 	}
-	if user, ok := ctx.Value(UserContextKey).(*models.UserDTO); ok { // Tür doğrulaması (type assertion) ile arayüzü somut UserDTO tipine dönüştür
-		return user
-	}
-	return nil
+	user, _ := ctx.Value(UserContextKey).(*models.UserDTO)
+	return user
 }
 
-// RequireAuth, uç noktayı koruyarak yalnızca oturum açmış kullanıcıların geçişine izin veren ara katmandır.
-// Giriş yapmamış kullanıcıları API isteklerinde 401 Unauthorized hatasıyla engeller, web isteklerinde ise giriş sayfasına yönlendirir.
+// RequireAuth, yalnızca oturum açmış kullanıcıların geçişine izin verir.
+// API isteklerinde 401 döner, sayfa isteklerinde giriş sayfasına yönlendirir.
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := GetUserFromContext(r.Context()) // İstek bağlamından oturum açmış kullanıcıyı al
-		if user == nil {
-			if isAPIRequest(r) { // Gelen istek bir API çağrısı mı (JSON yanıtı bekleyen istemci mi)?
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.WriteHeader(http.StatusUnauthorized) // 401 Yetkisiz (Unauthorized) durum kodu ayarla
-				_, _ = w.Write([]byte(`{"error":"Bu işlem için oturum açmanız gerekmektedir"}`))
-				return
-			}
-			// Web tarayıcısı isteğiyse, giriş yaptıktan sonra kaldığı sayfaya geri dönebilmesi için hedef yolu ekleyerek yönlendir (303)
-			http.Redirect(w, r, "/login?redirect="+r.URL.Path, http.StatusSeeOther)
+		if GetUserFromContext(r.Context()) != nil {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r) // Kullanıcı doğrulanmışsa isteğin sonraki aşamaya geçmesine izin ver
+		if IsAPIRequest(r) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"Bu işlem için oturum açmanız gerekmektedir"}`))
+			return
+		}
+		target := r.URL.Path
+		if r.Method != http.MethodGet {
+			// POST sonrası geri dönülecek sayfa olarak formu gönderen sayfa değil, güvenli bir varsayılan kullanılır
+			target = "/listings"
+		}
+		http.Redirect(w, r, "/login?redirect="+url.QueryEscape(target), http.StatusSeeOther)
 	})
 }
 
-// RequireAdmin, korumalı alanlara yalnızca yönetici (admin) rolüne sahip kullanıcıların erişmesini sağlayan ara katmandır.
-// Kullanıcı giriş yapmamışsa login sayfasına, giriş yapmış fakat admin yetkisi yoksa 403 Forbidden sayfasına yönlendirir.
-func RequireAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := GetUserFromContext(r.Context()) // İstek bağlamından mevcut kullanıcıyı kontrol et
-		if user == nil {
-			http.Redirect(w, r, "/login?redirect="+r.URL.Path, http.StatusSeeOther) // Giriş yapılmamışsa doğrudan giriş sayfasına yönlendir
-			return
-		}
-		if !user.IsAdmin() { // Kullanıcının yönetici yetkisi olup olmadığını denetle
-			if isAPIRequest(r) {
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.WriteHeader(http.StatusForbidden) // 403 Yasaklandı (Forbidden) durum kodu
-				_, _ = w.Write([]byte(`{"error":"Bu işlem için yönetici (admin) yetkisi gerekmektedir"}`))
-				return
-			}
-			http.Redirect(w, r, "/403", http.StatusSeeOther) // Web isteği için 403 Yetkisiz Erişim sayfasına yönlendir
-			return
-		}
-		next.ServeHTTP(w, r) // Kullanıcı yönetici yetkisine sahipse isteğin devam etmesine izin ver
-	})
-}
-
-// SetAuthCookie, kullanıcı sisteme başarılı bir şekilde giriş yaptığında tarayıcıya güvenli bir oturum çerezi (cookie) bırakır.
-func SetAuthCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
-	isProd := strings.EqualFold(os.Getenv("SERVER_ENV"), "production") // Sunucunun canlı (production) ortamda çalışıp çalışmadığını kontrol et
+// SetAuthCookie, başarılı girişten sonra güvenli oturum çerezini yazar.
+// secure=true ise çerez yalnızca HTTPS üzerinden gönderilir (canlı ortam).
+func SetAuthCookie(w http.ResponseWriter, token string, expiresAt time.Time, secure bool) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,    // Çerezin adı (session_token)
-		Value:    token,                // Sunucu tarafından üretilen benzersiz oturum belirteci değeri
-		Path:     "/",                  // Çerezin sitenin tüm yollarında geçerli olmasını sağlar
-		Expires:  expiresAt,            // Çerezin tarayıcıda geçerliliğini yitireceği tarih ve saat
-		HttpOnly: true,                 // JavaScript ile erişimi engeller; XSS (Cross-Site Scripting) saldırılarına karşı korur
-		Secure:   isProd,               // Canlı ortamda (HTTPS) true, yerel geliştirme ortamında (HTTP) false yapılır
-		SameSite: http.SameSiteLaxMode, // Siteler arası istek sahteciliğini (CSRF) önlemek için çerezi korumalı modda tutar
+		Name:     SessionCookieName,
+		Value:    token,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: true,                 // JavaScript erişemez (XSS'e karşı)
+		Secure:   secure,               // Canlı ortamda yalnızca HTTPS
+		SameSite: http.SameSiteLaxMode, // Siteler arası POST isteklerinde gönderilmez (CSRF'e karşı)
 	})
 }
 
-// clearAuthCookie, kullanıcının oturumu sonlandığında veya geçersiz olduğunda tarayıcıdaki oturum çerezini siler.
-func clearAuthCookie(w http.ResponseWriter) {
+// ClearAuthCookie, tarayıcıdaki oturum çerezini siler.
+func ClearAuthCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,    // Silinecek çerezin adı
-		Value:    "",                   // Çerez değerini boşaltır
-		Path:     "/",                  // Çerezin tanımlı olduğu ana yol
-		Expires:  time.Unix(0, 0),       // Geçmiş bir tarih (1 Ocak 1970) atanarak tarayıcının çerezi anında silmesi sağlanır
-		MaxAge:   -1,                   // Tarayıcıya çerezi önbellekten derhal yok etmesi talimatını verir
-		HttpOnly: true,                 // Güvenlik gereği JavaScript erişim kısıtlaması korunur
-		SameSite: http.SameSiteLaxMode, // Çerez güvenlik politikası
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-// extractToken, gelen HTTP isteğinden oturum belirtecini (token) elde etmeye çalışır.
-// Öncelikli olarak tarayıcı çerezlerine (cookie) bakar, çerez yoksa 'Authorization: Bearer <token>' başlığını inceler.
-func extractToken(r *http.Request) string {
-	cookie, err := r.Cookie(SessionCookieName) // İstekten 'session_token' adlı çerezi oku
-	if err == nil && cookie.Value != "" {
-		return cookie.Value // Çerez mevcut ve değeri doluysa belirteci döndür
+// ExtractToken, istekten oturum belirtecini okur: önce çerez, sonra 'Authorization: Bearer' başlığı.
+func ExtractToken(r *http.Request) string {
+	if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
+		return cookie.Value
 	}
-
-	authHeader := r.Header.Get("Authorization") // Çerez bulunamadıysa HTTP Authorization başlığını kontrol et
-	if authHeader != "" {
-		parts := strings.SplitN(authHeader, " ", 2) // "Bearer <token>" biçimindeki başlığı boşluğa göre ikiye ayır
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-			return strings.TrimSpace(parts[1]) // Format doğruysa token kısmını boşluklardan arındırıp döndür
-		}
+	scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	if found && strings.EqualFold(scheme, "Bearer") {
+		return strings.TrimSpace(token)
 	}
-
 	return ""
 }
 
-// isAPIRequest, gelen HTTP isteğinin bir API (web servisi) çağrısı olup olmadığını kontrol eder.
-// URL yolunun '/api/' ile başlayıp başlamadığına veya istemcinin JSON formatında veri bekleyip beklemediğine bakar.
-func isAPIRequest(r *http.Request) bool {
-	return strings.HasPrefix(r.URL.Path, "/api/") || // URL yolu '/api/' ile mi başlıyor?
-		strings.Contains(r.Header.Get("Accept"), "application/json") // İstemci JSON yanıtı mı talep ediyor?
+// IsAPIRequest, isteğin JSON yanıt bekleyen bir API çağrısı olup olmadığını döner.
+func IsAPIRequest(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/api/") ||
+		strings.Contains(r.Header.Get("Accept"), "application/json")
 }

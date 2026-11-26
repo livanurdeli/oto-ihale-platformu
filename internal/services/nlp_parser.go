@@ -33,12 +33,18 @@ var (
 	reHatasiz = regexp.MustCompile(`(?i)\b(hatasiz|boyasiz|degisensiz|kusursuz|ciziksiz|0\s*hata|sifir\s*hata|nokta\s*hatasiz)\b`)
 	// Tramer kaydı olmadığını belirten ifadeler (örn: tramersiz, hasar kaydı yok)
 	reTramersiz = regexp.MustCompile(`(?i)\b(tramersiz|tramer\s*(kaydi|yok|0)|hasar\s*kayitsiz|hasar\s*kaydi\s*yok)\b`)
-	// Değişen parça olduğunu belirten ifadeler (örn: değişen, değişti, 2 parça değişen)
-	reDegisen = regexp.MustCompile(`(?i)(degisen|degisti|\d+\s*parca\s*degisen)`)
+	// Değişen parça olduğunu belirten ifadeler (örn: değişen, değişti, 2 parça değişen).
+	// Kelime sınırı (\b) sayesinde "değişensiz" kelimesi "değişen" olarak yakalanmaz.
+	reDegisen = regexp.MustCompile(`(?i)\b(degisen|degisti|degismis)\b`)
 	// Boyalı parça olduğunu belirten ifadeler (örn: boyalı, lokal boya, temizlik boyası)
-	reBoyali = regexp.MustCompile(`(?i)(boyali|boyalidir|lokal\s*boya|temizlik\s*boyasi|\d+\s*parca\s*boya)`)
-	// Tramer veya hasar kaydı olduğunu belirten ifadeler (örn: 5000 tl tramer, hasar kayıtlı)
-	reTramerli = regexp.MustCompile(`(?i)(\d+[\.\d]*\s*(tl|bin\s*tl)?\s*tramer|hasar\s*kayitli|tramer\s*kaydi\s*var|tramerli|bedelsiz\s*tramer)`)
+	reBoyali = regexp.MustCompile(`(?i)\b(boyali|boyalidir|lokal\s*boya|temizlik\s*boyasi|\d+\s*parca\s*boya(li)?)\b`)
+	// Tramer veya hasar kaydı olduğunu belirten ifadeler (örn: 5000 tl tramer, hasar kayıtlı).
+	// "0 tramer" ve "2018 tramersiz" gibi ifadeler tramer kaydı sayılmaz.
+	reTramerli = regexp.MustCompile(`(?i)\b([1-9][\.\d]*\s*(tl|bin\s*tl)?\s*tramer|hasar\s*kayitli|tramer\s*kaydi\s*var|tramerli|bedelsiz\s*tramer)\b`)
+
+	// Olumsuz ifadeler: "değişen yok", "boya yok" gibi kalıplar hasar değil hatasızlık belirtir
+	reDegisenYok = regexp.MustCompile(`(?i)\bdegisen\s*(parca\s*)?(yok|yoktur|bulunmamaktadir)\b`)
+	reBoyaYok    = regexp.MustCompile(`(?i)\bboya(li)?\s*(parca\s*)?(yok|yoktur|bulunmamaktadir)\b`)
 
 	// Donanım ve konfor özellikleri için düzenli ifadeler
 	reCamTavan     = regexp.MustCompile(`(?i)\b(cam\s*tavan|sunroof|panoramik)\b`)
@@ -64,6 +70,9 @@ func NormalizeTurkishText(text string) string {
 // ParseListingText, ilan başlığı ve açıklamasından hasar durumu ve donanımları Regex/NLP ile çıkarır.
 func ParseListingText(title, description string) ParsedListingMeta {
 	combined := NormalizeTurkishText(title + " " + description) // Başlık ve açıklamayı birleştirip karakterleri normalize eder
+	// Olumsuz kalıpları eşdeğer "-siz" biçimlerine çevir ("değişen yok" -> "degisensiz")
+	combined = reDegisenYok.ReplaceAllString(combined, "degisensiz")
+	combined = reBoyaYok.ReplaceAllString(combined, "boyasiz")
 
 	// Belirlenen kalıpların metin içinde geçip geçmediğini kontrol eder
 	hasDegisen := reDegisen.MatchString(combined)
@@ -72,7 +81,7 @@ func ParseListingText(title, description string) ParsedListingMeta {
 	isHatasiz := reHatasiz.MatchString(combined)
 	isTramersiz := reTramersiz.MatchString(combined)
 
-	damageStatus := models.DamageUnknown // Varsayılan durum: Bilinmiyor
+	damageStatus := models.DamageNone // Varsayılan: hasar bilgisi yoksa "Hasar Yok" kabul edilir
 	if hasDegisen {
 		damageStatus = models.DamageReplaced // Değişen parça en öncelikli hasar durumudur
 	} else if hasBoya {

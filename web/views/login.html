@@ -9,12 +9,31 @@
       </p>
     </div>
 
+    <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+      <button type="button" id="tab-email-btn" onclick="switchLoginMethod('email')" style="flex: 1; padding: 8px 12px; border: none; border-radius: 6px; font-weight: 600; font-size: 0.88rem; cursor: pointer; background: white; color: #0f172a; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        ✉️ E-posta ile
+      </button>
+      <button type="button" id="tab-username-btn" onclick="switchLoginMethod('username')" style="flex: 1; padding: 8px 12px; border: none; border-radius: 6px; font-weight: 600; font-size: 0.88rem; cursor: pointer; background: transparent; color: #64748b;">
+        👤 Kullanıcı Adı ile
+      </button>
+    </div>
+
     <form method="POST" action="/login" style="display: flex; flex-direction: column; gap: 1.25rem;">
-      <div>
+      <input type="hidden" name="redirect" value="{{with .Data}}{{index . "Redirect"}}{{end}}">
+      <div id="email-box">
         <label for="email" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
-          E-posta veya Kullanıcı Adı
+          E-posta Adresi
         </label>
-        <input type="text" id="email" name="email" required placeholder="ornek@otoihale.com veya kullanıcı adı"
+        <input type="email" id="email" name="email" placeholder="ornek@otoihale.com"
+          style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none; transition: border-color 0.2s;"
+          onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
+      </div>
+
+      <div id="username-box" style="display: none;">
+        <label for="username" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+          Kullanıcı Adı
+        </label>
+        <input type="text" id="username" name="username" placeholder="kullanıcı adınız"
           style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none; transition: border-color 0.2s;"
           onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
       </div>
@@ -32,6 +51,41 @@
         Giriş Yap
       </button>
     </form>
+
+    <script>
+      function switchLoginMethod(method) {
+        const emailBox = document.getElementById('email-box');
+        const usernameBox = document.getElementById('username-box');
+        const emailInput = document.getElementById('email');
+        const usernameInput = document.getElementById('username');
+        const emailBtn = document.getElementById('tab-email-btn');
+        const usernameBtn = document.getElementById('tab-username-btn');
+
+        if (method === 'email') {
+          emailBox.style.display = 'block';
+          usernameBox.style.display = 'none';
+          usernameInput.value = '';
+          emailBtn.style.background = 'white';
+          emailBtn.style.color = '#0f172a';
+          emailBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+          usernameBtn.style.background = 'transparent';
+          usernameBtn.style.color = '#64748b';
+          usernameBtn.style.boxShadow = 'none';
+          emailInput.focus();
+        } else {
+          emailBox.style.display = 'none';
+          usernameBox.style.display = 'block';
+          emailInput.value = '';
+          usernameBtn.style.background = 'white';
+          usernameBtn.style.color = '#0f172a';
+          usernameBtn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+          emailBtn.style.background = 'transparent';
+          emailBtn.style.color = '#64748b';
+          emailBtn.style.boxShadow = 'none';
+          usernameInput.focus();
+        }
+      }
+    </script>
 
     <div style="margin-top: 1.75rem; text-align: center; font-size: 0.9rem; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 1.25rem;">
       Hesabınız yok mu?

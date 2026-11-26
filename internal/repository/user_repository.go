@@ -2,26 +2,16 @@ package repository
 
 // ============================================================================
 // DOSYA AMACI:
-// Bu dosya, kullanıcıların (users) veritabanı işlemlerini gerçekleştiren
-// veri erişim katmanıdır (Repository). Kullanıcı kaydı oluşturma, e-posta
-// veya ID ile arama, engelleme durumu sorgulama ve yönetici için kullanıcıları
-// listeleme gibi PostgreSQL işlemlerini güvenli şekilde yürütür.
-// ============================================================================
-// ADIM 4.2: VERİ ERİŞİM KATMANI - KULLANICI DEPOSU (POSTGRESQL UYGULAMASI)
-// ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. Veri Güvenliği: SQL Enjeksiyonuna (SQL Injection) karşı parametreli ($1, $2)
-//    sorgular kullanılır. Kullanıcı girdileri sorgu mantığını değiştiremez.
-// 2. Benzersizlik Kontrolü: PostgreSQL hata kodu 23505 (benzersizlik ihlali)
-//    yakalanarak aynı e-posta ile mükerrer kayıt açılması engellenir.
-// 3. Veri Transfer Nesnesi (DTO): Kullanıcı listelenirken şifre özeti gibi hassas
-//    verilerin sızmasını önlemek için UserDTO yapısı kullanılır.
+// Kullanıcıların (users) veritabanı işlemlerini gerçekleştiren veri erişim
+// katmanıdır. Tüm sorgular parametreli ($1, $2) yazılarak SQL enjeksiyonu
+// önlenir; benzersizlik ihlalleri (23505) anlamlı hatalara çevrilir.
 // ============================================================================
 
 import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -29,191 +19,149 @@ import (
 	"car-auction-platform/internal/models"
 )
 
-// ============================================================================
-// HATA TANIMLARI
-// ============================================================================
-// Kullanıcı işlemleri sırasında karşılaşılabilecek özel hata durumları.
 var (
 	ErrUserNotFound      = errors.New("kullanıcı bulunamadı")
 	ErrEmailAlreadyTaken = errors.New("bu e-posta adresi zaten kullanımda")
-	ErrUserBlocked       = errors.New("hesabınız yönetici tarafından engellenmiştir")
+	ErrUsernameTaken     = errors.New("bu kullanıcı adı zaten kullanımda")
+	ErrCannotReportSelf  = errors.New("kendi hesabınızı şikayet edemezsiniz")
 )
 
-// UserRepository, PostgreSQL kullanıcı tablosu işlemlerini yöneten veri deposu yapısıdır.
+const userColumns = `id, name, email, password_hash, created_at, updated_at`
+
+// UserRepository, PostgreSQL kullanıcı tablosu işlemlerini yöneten veri deposudur.
 type UserRepository struct {
-	db *sql.DB // Veritabanı bağlantı havuzunu (connection pool) yöneten nesne
+	db *sql.DB
 }
 
-// NewUserRepository, yeni bir UserRepository (kullanıcı deposu) örneği oluşturur.
 func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-// CreateUser, sisteme yeni bir kullanıcı ekler (varsayılan rol: 'user').
-// Veritabanına yeni satır ekleyip oluşturulan kullanıcının verilerini döner.
-func (r *UserRepository) CreateUser(ctx context.Context, name, email, passwordHash string) (*models.User, error) {
-	normEmail := auth.NormalizeEmail(email) // E-postayı küçük harfe çevirip kenar boşluklarını temizler
-
-	query := `
-		INSERT INTO users (name, email, password_hash, role, is_blocked, created_at, updated_at)
-		VALUES ($1, $2, $3, 'user', FALSE, NOW(), NOW())
-		RETURNING id, name, email, password_hash, role, is_blocked, created_at, updated_at
-	` // Yeni kaydı ekler ve veritabanı tarafından üretilen alanları (ID, tarihler vb.) anında geri döndürür
-
+func scanUser(row *sql.Row) (*models.User, error) {
 	var u models.User
-	// Parametreli ($1, $2, $3) sorguyu çalıştırır ve dönen satırı User modeline aktarır
-	err := r.db.QueryRowContext(ctx, query, name, normEmail, passwordHash).Scan(
-		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
-	)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		// 23505: PostgreSQL'de benzersiz alan ihlali (unique_violation) hata kodudur
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return nil, ErrEmailAlreadyTaken // Aynı e-posta adresi zaten varsa özel hata döner
-		}
-		return nil, err
-	}
-
-	return &u, nil
-}
-
-// GetUserByEmail, verilen e-posta adresine sahip kullanıcıyı veritabanında arar.
-func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	normEmail := auth.NormalizeEmail(email) // Büyük/küçük harf duyarsızlığı için e-postayı standartlaştırır
-
-	// LOWER() fonksiyonu ile büyük-küçük harf farkı gözetmeksizin arama yapılır
-	query := `
-		SELECT id, name, email, password_hash, role, is_blocked, created_at, updated_at
-		FROM users
-		WHERE LOWER(email) = LOWER($1)
-	`
-
-	var u models.User
-	err := r.db.QueryRowContext(ctx, query, normEmail).Scan(
-		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) { // Belirtilen e-posta ile eşleşen bir kayıt bulunamazsa
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
-
-	return &u, nil
-}
-
-// GetUserByUsernameOrEmail, e-posta veya isim/kullanıcı adına göre kullanıcıyı bulur.
-func (r *UserRepository) GetUserByUsernameOrEmail(ctx context.Context, identifier string) (*models.User, error) {
-	norm := auth.NormalizeEmail(identifier)
-
-	query := `
-		SELECT id, name, email, password_hash, role, is_blocked, created_at, updated_at
-		FROM users
-		WHERE LOWER(email) = LOWER($1) OR (name <> '' AND LOWER(name) = LOWER($1))
-		LIMIT 1
-	`
-
-	var u models.User
-	err := r.db.QueryRowContext(ctx, query, norm).Scan(
-		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
-	)
+	err := row.Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
 		}
 		return nil, err
 	}
-
 	return &u, nil
 }
 
-// GetUserByID, benzersiz kimlik numarasına (ID) göre kullanıcıyı veritabanından getirir.
-func (r *UserRepository) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
-	query := `
-		SELECT id, name, email, password_hash, role, is_blocked, created_at, updated_at
-		FROM users
-		WHERE id = $1
-	`
-
-	var u models.User
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) { // Belirtilen ID'ye sahip kullanıcı bulunamazsa
-			return nil, ErrUserNotFound
+// mapUniqueViolation, benzersizlik ihlalini ihlal edilen indekse göre anlamlı bir hataya çevirir.
+func mapUniqueViolation(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if strings.Contains(pgErr.ConstraintName, "name") {
+			return ErrUsernameTaken
 		}
-		return nil, err
+		return ErrEmailAlreadyTaken
 	}
-
-	return &u, nil
-}
-
-// GetUserStatus, kullanıcının engellenme (is_blocked) durumunu sorgular.
-func (r *UserRepository) GetUserStatus(ctx context.Context, id int64) (isBlocked bool, err error) {
-	query := `SELECT is_blocked FROM users WHERE id = $1` // Sadece engellenme sütununu çeken hafif sorgu
-	err = r.db.QueryRowContext(ctx, query, id).Scan(&isBlocked)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) { // Kullanıcı kaydı bulunamadıysa
-			return false, ErrUserNotFound
-		}
-		return false, err
-	}
-	return isBlocked, nil
-}
-
-// CreateInitialUserIfNotExists, başlangıç demo veya yönetici hesaplarını oluşturur (kullanıcı zaten varsa dokunmaz).
-func (r *UserRepository) CreateInitialUserIfNotExists(ctx context.Context, name, email, passwordHash, role string) error {
-	normEmail := auth.NormalizeEmail(email) // E-posta adresini standart formata çevirir
-	if role == "" {
-		role = "user" // Rol belirtilmemişse varsayılan standart kullanıcı rolü atanır
-	}
-
-	// ON CONFLICT: E-posta zaten mevcutsa hata üretmez, mevcut kaydın rolünü ve adını günceller (Upsert işlemi)
-	query := `
-		INSERT INTO users (name, email, password_hash, role, is_blocked, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, FALSE, NOW(), NOW())
-		ON CONFLICT (LOWER(email)) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role, password_hash = EXCLUDED.password_hash
-	`
-	_, err := r.db.ExecContext(ctx, query, name, normEmail, passwordHash, role)
 	return err
 }
 
-// ListUsers, yönetici paneli için sistemdeki tüm kullanıcıları listeler.
-// Şifre bilgisini içermeyen UserDTO (Veri Transfer Nesnesi) listesi döner.
-func (r *UserRepository) ListUsers(ctx context.Context) ([]*models.UserDTO, error) {
+// CreateUser, sisteme yeni bir kullanıcı ekler ve oluşturulan kaydı döner.
+func (r *UserRepository) CreateUser(ctx context.Context, name, email, passwordHash string) (*models.User, error) {
 	query := `
-		SELECT id, name, email, role, is_blocked, created_at, updated_at
-		FROM users
-		ORDER BY id ASC
-	`
-	rows, err := r.db.QueryContext(ctx, query) // Birden fazla satır döndüren sorguyu çalıştırır
+		INSERT INTO users (name, email, password_hash, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		RETURNING ` + userColumns
+	u, err := scanUser(r.db.QueryRowContext(ctx, query, name, auth.NormalizeEmail(email), passwordHash))
 	if err != nil {
-		return nil, err
+		return nil, mapUniqueViolation(err)
 	}
-	defer rows.Close() // Fonksiyon bitiminde veritabanı imlecini kapatıp bağlantıyı havuza iade eder
-
-	var users []*models.UserDTO
-	for rows.Next() { // Dönen sonuç satırlarını tek tek dolaşır
-		var u models.UserDTO
-		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.IsBlocked, &u.CreatedAt, &u.UpdatedAt); err != nil { // Sütun verilerini nesneye aktarır
-			return nil, err
-		}
-		users = append(users, &u) // Okunan kullanıcıyı listeye ekler
-	}
-	return users, rows.Err() // Satırları okurken herhangi bir hata oluşup oluşmadığını doğrular
+	return u, nil
 }
 
-// SetUserBlocked, kullanıcının engellenme durumunu günceller (hesabı dondurur veya açar).
-func (r *UserRepository) SetUserBlocked(ctx context.Context, id int64, blocked bool) error {
-	query := `UPDATE users SET is_blocked = $1, updated_at = NOW() WHERE id = $2`
-	res, err := r.db.ExecContext(ctx, query, blocked, id) // Güncelleme komutunu çalıştırır
+// GetUserByUsernameOrEmail, '@' içeren tanımlayıcıyı e-posta, diğerlerini kullanıcı adı olarak arar.
+// Kullanıcı adları '@' içeremez ve benzersizdir; bu sayede eşleşme her zaman tek ve belirlidir.
+func (r *UserRepository) GetUserByUsernameOrEmail(ctx context.Context, identifier string) (*models.User, error) {
+	identifier = strings.TrimSpace(identifier)
+	if strings.Contains(identifier, "@") {
+		query := `SELECT ` + userColumns + ` FROM users WHERE LOWER(email) = LOWER($1)`
+		return scanUser(r.db.QueryRowContext(ctx, query, auth.NormalizeEmail(identifier)))
+	}
+	query := `SELECT ` + userColumns + ` FROM users WHERE LOWER(name) = LOWER($1)`
+	return scanUser(r.db.QueryRowContext(ctx, query, identifier))
+}
+
+// GetUserByID, kimlik numarasına göre kullanıcıyı getirir.
+func (r *UserRepository) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
+	query := `SELECT ` + userColumns + ` FROM users WHERE id = $1`
+	return scanUser(r.db.QueryRowContext(ctx, query, id))
+}
+
+// UpdateProfile, kullanıcının adını ve e-postasını günceller.
+func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, name, email string) error {
+	query := `UPDATE users SET name = $1, email = $2, updated_at = NOW() WHERE id = $3`
+	res, err := r.db.ExecContext(ctx, query, name, auth.NormalizeEmail(email), id)
+	if err != nil {
+		return mapUniqueViolation(err)
+	}
+	return requireAffected(res)
+}
+
+// UpdatePassword, kullanıcının şifre özetini günceller.
+func (r *UserRepository) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, passwordHash, id)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected() // Güncellemeden etkilenen satır sayısını kontrol eder
-	if n == 0 { // Etkilenen satır 0 ise, böyle bir kullanıcı ID'si veritabanında yoktur
+	return requireAffected(res)
+}
+
+// DeleteUser, kullanıcının hesabını veritabanından tamamen siler.
+func (r *UserRepository) DeleteUser(ctx context.Context, id int64) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(res)
+}
+
+func requireAffected(res sql.Result) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return ErrUserNotFound
 	}
 	return nil
+}
+
+// ReportUserFraud, şikayeti kaydeder (aynı kişi tekrar şikayet ederse günceller) ve
+// hedef kullanıcı hakkındaki tekil şikayetçi sayısını döner.
+func (r *UserRepository) ReportUserFraud(ctx context.Context, reporterID, reportedUserID int64, reason string) (int, error) {
+	if reporterID == reportedUserID {
+		return 0, ErrCannotReportSelf
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	insertQuery := `
+		INSERT INTO fraud_reports (reported_user_id, reporter_user_id, reason, created_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (reporter_user_id, reported_user_id) DO UPDATE SET reason = EXCLUDED.reason, created_at = NOW()
+	`
+	if _, err := tx.ExecContext(ctx, insertQuery, reportedUserID, reporterID, reason); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // Yabancı anahtar ihlali: hedef kullanıcı yok
+			return 0, ErrUserNotFound
+		}
+		return 0, err
+	}
+
+	var count int
+	countQuery := `SELECT COUNT(DISTINCT reporter_user_id) FROM fraud_reports WHERE reported_user_id = $1`
+	if err := tx.QueryRowContext(ctx, countQuery, reportedUserID).Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, tx.Commit()
 }

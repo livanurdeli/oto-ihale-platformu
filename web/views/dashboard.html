@@ -1,5 +1,6 @@
 {{define "content"}}
 <div style="padding: 1rem 0;">
+
   <!-- BAŞLIK & KARŞILAMA -->
   <div style="background: white; border-radius: var(--radius-lg); padding: 2rem; box-shadow: var(--shadow); border: 1px solid #e2e8f0; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.5rem;">
     <div>
@@ -7,7 +8,7 @@
         <h1 style="font-size: 1.8rem; font-weight: 800; color: #0f172a;">Kullanıcı Paneli</h1>
       </div>
       <p style="color: #64748b; font-size: 0.95rem;">
-        Hoş geldiniz, <strong>{{.User.Email}}</strong>.
+        Hoş geldiniz, <strong>{{if .User.Name}}{{.User.Name}} ({{.User.Email}}){{else}}{{.User.Email}}{{end}}</strong>.
       </p>
     </div>
 
@@ -38,6 +39,73 @@
       <div style="font-size: 1.1rem; font-weight: 700; color: #334155; margin-top: 0.7rem;">
         {{formatDate .User.CreatedAt}}
       </div>
+    </div>
+  </div>
+
+  <!-- PROFİL GÜNCELLEME VE ŞİFRE DEĞİŞTİRME ALANI -->
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <!-- Profil Bilgileri -->
+    <div style="background: white; border: 1px solid #e2e8f0; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow);">
+      <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 1.25rem;">
+        👤 Profil Bilgilerini Güncelle
+      </h3>
+      <form method="POST" action="/profile/update" style="display: flex; flex-direction: column; gap: 1rem;">
+        <div>
+          <label style="display: block; font-size: 0.88rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+            Kullanıcı Adı
+          </label>
+          <input type="text" name="name" value="{{.User.Name}}" required minlength="3" maxlength="50" pattern="[^@<>]+" title="3-50 karakter, '@' içeremez" placeholder="Kullanıcı adınız"
+            style="width: 100%; padding: 0.65rem 0.85rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem;">
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 0.88rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+            E-posta Adresi
+          </label>
+          <input type="email" name="email" value="{{.User.Email}}" required placeholder="ornek@otoihale.com"
+            style="width: 100%; padding: 0.65rem 0.85rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem;">
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem; padding: 0.7rem;">
+          Bilgilerimi Kaydet
+        </button>
+      </form>
+    </div>
+
+    <!-- Şifre Değiştirme -->
+    <div style="background: white; border: 1px solid #e2e8f0; border-radius: var(--radius-md); padding: 1.75rem; box-shadow: var(--shadow);">
+      <h3 style="font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-bottom: 1.25rem;">
+        🔒 Şifre Değiştir
+      </h3>
+      <form method="POST" action="/profile/password" style="display: flex; flex-direction: column; gap: 1rem;">
+        <div>
+          <label style="display: block; font-size: 0.88rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+            Mevcut Şifre
+          </label>
+          <input type="password" name="old_password" required placeholder="••••••••"
+            style="width: 100%; padding: 0.65rem 0.85rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem;">
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 0.88rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+            Yeni Şifre (En az 8 karakter)
+          </label>
+          <input type="password" name="new_password" required placeholder="••••••••"
+            style="width: 100%; padding: 0.65rem 0.85rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem;">
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 0.88rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
+            Yeni Şifre Tekrar
+          </label>
+          <input type="password" name="confirm_password" required placeholder="••••••••"
+            style="width: 100%; padding: 0.65rem 0.85rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem;">
+        </div>
+
+        <button type="submit" class="btn btn-secondary" style="margin-top: 0.5rem; padding: 0.7rem;">
+          Şifremi Güncelle
+        </button>
+      </form>
     </div>
   </div>
 

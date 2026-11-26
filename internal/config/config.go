@@ -1,19 +1,10 @@
 package config
 
-// ============================================================================
-// ADIM 2.1: KONFİGÜRASYON YÖNETİMİ (12-FACTOR APP PRENSİBİ)
-// ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. 12-Factor App Prensibi: Şifreler, portlar koda "hardcoded" yazılmaz;
-//    ortam değişkenlerinden (.env dosyası veya sistem env) okunur.
-// 2. JWT Kaldırıldı -> Session Tabanlı Oturuma Geçildi:
-//    Config'den JWTSecret alanı kaldırılmıştır. Oturum yönetimi artık
-//    PostgreSQL 'sessions' tablosu üzerinden yapılmaktadır.
-// ============================================================================
-
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -30,6 +21,15 @@ type Config struct {
 	DBSSLMode  string
 
 	DatabaseURL string
+
+	// AuctionWorkerInterval, açık artırma servisinin süresi dolan ihaleleri kontrol etme sıklığıdır.
+	AuctionWorkerInterval time.Duration
+}
+
+// IsProduction, uygulamanın canlı (production) ortamda çalışıp çalışmadığını döner.
+// Canlı ortamda çerezler yalnızca HTTPS üzerinden gönderilir (Secure).
+func (c *Config) IsProduction() bool {
+	return strings.EqualFold(c.ServerEnv, "production")
 }
 
 func LoadConfig() (*Config, error) {
@@ -46,6 +46,12 @@ func LoadConfig() (*Config, error) {
 		DBName:     getEnv("DB_NAME", "car_auction_db"),
 		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
 	}
+
+	interval, err := time.ParseDuration(getEnv("AUCTION_WORKER_INTERVAL", "5s"))
+	if err != nil || interval <= 0 {
+		return nil, fmt.Errorf("AUCTION_WORKER_INTERVAL geçersiz (örn: 5s): %q", os.Getenv("AUCTION_WORKER_INTERVAL"))
+	}
+	cfg.AuctionWorkerInterval = interval
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {

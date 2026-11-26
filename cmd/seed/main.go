@@ -16,21 +16,10 @@ import (
 	"car-auction-platform/internal/db"
 )
 
-// ============================================================================
-// CMD / SEED / MAIN.GO: VERİ TABANI TOHUMLAMA (SEED) ARACI
-// ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. Amacı: CSV dosyasındaki (data/tum_veriler.csv) araç verilerini okuyup
-//    temizleyerek açık artırma alanlarıyla birlikte veritabanına aktarmaktır.
-// 2. Role kaldırılmıştır; demo kullanıcı standart üyedir.
-// 3. Hasar Durumu: "bilinmiyor" kaldırılmıştır; varsayılan "yok" (Hasar Yok)tur.
-// 4. Açık Artırma: Başlangıç fiyatı, minimum artış ve bitiş süresi atanır.
-// ============================================================================
-
 func main() {
 	limitFlag := flag.Int("limit", 100, "Aktarılacak maksimum geçerli araç sayısı (0 ise tümü)")
 	filePathFlag := flag.String("file", "data/tum_veriler.csv", "Okunacak CSV dosya yolu")
-	cleanFlag := flag.Bool("clean", false, "Aktarımdan önce demo kullanıcının eski ilanlarını temizle")
+	cleanFlag := flag.Bool("clean", false, "Aktarımdan önce sistem kullanıcısının eski ilanlarını temizle")
 	flag.Parse()
 
 	log.Println("🌱 Seed / Veri İçe Aktarma Aracı Başlatılıyor...")
@@ -46,24 +35,25 @@ func main() {
 	}
 	defer database.Close()
 
-	// Demo kullanıcısını hazırla (role kaldırıldı)
+	// İçe aktarılan piyasa ilanlarının sahibi olacak sistem hesabını hazırla.
+	// Şifre özeti geçerli bir bcrypt değeri olmadığından bu hesapla giriş yapılamaz.
 	var defaultUserID int64
 	err = database.QueryRow(`
-		INSERT INTO users (email, password_hash, is_blocked)
-		VALUES ('demo@aracihale.com', '$2a$10$DEMOPASSWORDHASHFORTESTINGPURPOSESONLY000', FALSE)
+		INSERT INTO users (name, email, password_hash)
+		VALUES ('PiyasaVerisi', 'piyasa-verisi@otoihale.local', '!giris-kapali')
 		ON CONFLICT (LOWER(email)) DO UPDATE SET updated_at = NOW()
 		RETURNING id;
 	`).Scan(&defaultUserID)
 	if err != nil {
-		log.Fatalf("❌ Demo kullanıcı hazırlanamadı: %v", err)
+		log.Fatalf("❌ Sistem kullanıcısı hazırlanamadı: %v", err)
 	}
-	log.Printf("👤 İlanların atanacağı demo kullanıcı ID: %d", defaultUserID)
+	log.Printf("👤 İlanların atanacağı sistem kullanıcısı ID: %d", defaultUserID)
 
 	if *cleanFlag {
 		if _, err := database.Exec(`DELETE FROM listings WHERE user_id = $1`, defaultUserID); err != nil {
 			log.Printf("⚠️ Eski ilanlar temizlenirken hata: %v", err)
 		} else {
-			log.Println("🧹 Demo kullanıcısına ait eski ilanlar temizlendi.")
+			log.Println("🧹 Sistem kullanıcısına ait eski ilanlar temizlendi.")
 		}
 	}
 
@@ -186,12 +176,13 @@ func main() {
 			transmission = "otomatik"
 		}
 
-		// 4. Hasar Durumu: Gerçekçi veri aktarımı (bilinmeyen durumlar 'bilinmiyor' olarak atanır)
+		// 4. Hasar Durumu: Gerçekçi veri aktarımı
 		boyasiz := getVal("boyasiz")
 		degisensiz := getVal("degisensiz")
 		tramersiz := getVal("tramersiz")
 
-		damage := "bilinmiyor"
+		// Kural: hasar bilgisi bilinmiyorsa araç "Hasar Yok" kabul edilir
+		damage := "yok"
 		if strings.EqualFold(boyasiz, "evet") && strings.EqualFold(degisensiz, "evet") && strings.EqualFold(tramersiz, "evet") {
 			damage = "yok"
 		} else if strings.EqualFold(tramersiz, "evet") {

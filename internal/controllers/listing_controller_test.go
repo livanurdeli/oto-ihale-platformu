@@ -1,11 +1,14 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +21,9 @@ import (
 
 // mockListingService, testler için sahte ListingService implementasyonudur.
 type mockListingService struct {
-	listings map[int64]*models.Listing
-	bids     map[int64][]models.Bid
+	listings   map[int64]*models.Listing
+	bids       map[int64][]models.Bid
+	lastUpdate models.ListingCreateInput
 }
 
 func newMockListingService() *mockListingService {
@@ -29,13 +33,14 @@ func newMockListingService() *mockListingService {
 	}
 }
 
-func (m *mockListingService) CreateListingWithPhotos(ctx context.Context, actor *models.UserDTO, input models.ListingCreateInput, files []*multipart.FileHeader, uploadsDir string) (*models.Listing, error) {
+func (m *mockListingService) CreateListingWithPhotos(ctx context.Context, actor *models.UserDTO, input models.ListingCreateInput, files []*multipart.FileHeader) (*models.Listing, error) {
 	return nil, nil
 }
 func (m *mockListingService) UpdateListing(ctx context.Context, actor *models.UserDTO, id int64, input models.ListingCreateInput) (*models.Listing, error) {
-	return nil, nil
+	m.lastUpdate = input
+	return m.listings[id], nil
 }
-func (m *mockListingService) DeleteListing(ctx context.Context, actor *models.UserDTO, id int64, uploadsDir string) error {
+func (m *mockListingService) DeleteListing(ctx context.Context, actor *models.UserDTO, id int64) error {
 	return nil
 }
 func (m *mockListingService) ListListings(ctx context.Context, filter models.ListingFilter) (*models.Page[*models.Listing], error) {
@@ -43,9 +48,6 @@ func (m *mockListingService) ListListings(ctx context.Context, filter models.Lis
 }
 func (m *mockListingService) GetMyListings(ctx context.Context, userID int64) ([]*models.Listing, error) {
 	return nil, nil
-}
-func (m *mockListingService) CloseExpiredAuctions(ctx context.Context) (int, error) {
-	return 0, nil
 }
 
 func (m *mockListingService) GetListing(ctx context.Context, id int64) (*models.Listing, error) {
@@ -67,7 +69,7 @@ func (m *mockListingService) PlaceBid(ctx context.Context, actor *models.UserDTO
 		ID:        int64(len(m.bids[listingID]) + 1),
 		ListingID: listingID,
 		UserID:    actor.ID,
-		UserEmail: actor.Email,
+		UserName:  actor.Name,
 		Amount:    amount,
 		CreatedAt: time.Now(),
 	}
@@ -104,7 +106,7 @@ func TestAPIGetLiveListing_Success(t *testing.T) {
 			ID:        1,
 			ListingID: 10,
 			UserID:    2,
-			UserEmail: "ali@example.com",
+			UserName:  "ali",
 			Amount:    550000,
 			CreatedAt: time.Now().Add(-10 * time.Minute),
 		},
@@ -172,22 +174,105 @@ func TestAPIGetLiveListing_NotFound(t *testing.T) {
 	}
 }
 
-func TestMaskEmail(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"ahmet@gmail.com", "a***@gmail.com"},
-		{"livanur@hotmail.com", "l***@hotmail.com"},
-		{"a@test.com", "a***@test.com"},
-		{"invalid", "invalid"},
-		{"", ""},
+func newMultipartRequest(t *testing.T, target string, fields map[string]string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for k, v := range fields {
+		_ = mw.WriteField(k, v)
 	}
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, target, &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req
+}
 
-	for _, tt := range tests {
-		got := maskEmail(tt.input)
-		if got != tt.expected {
-			t.Errorf("maskEmail(%q) = %q, beklenen %q", tt.input, got, tt.expected)
-		}
+func withUser(req *http.Request, user *models.UserDTO) *http.Request {
+	return req.WithContext(context.WithValue(req.Context(), middlewares.UserContextKey, user))
+}
+
+// Teklif formu fetch + FormData (multipart) ile gönderildiğinde tutar okunabilmelidir.
+func TestPlaceBidPost_MultipartAJAX(t *testing.T) {
+	mockSvc := newMockListingService()
+	mockSvc.listings[10] = &models.Listing{ID: 10, UserID: 1, Status: "active", EndTime: time.Now().Add(time.Hour)}
+	c := &ListingController{listingService: mockSvc}
+
+	r := chi.NewRouter()
+	r.Post("/listings/{id}/bid", c.PlaceBidPost)
+
+	req := newMultipartRequest(t, "/listings/10/bid", map[string]string{"amount": "250000"})
+	req.Header.Set("Accept", "application/json")
+	req = withUser(req, &models.UserDTO{ID: 2, Name: "teklifci"})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("beklenen 200, alınan %d: %s", w.Code, w.Body.String())
+	}
+	if mockSvc.listings[10].CurrentBid != 250000 {
+		t.Errorf("Teklif tutarı okunmalıydı, current_bid: %v", mockSvc.listings[10].CurrentBid)
+	}
+}
+
+// Düzenleme formu multipart/form-data gönderir; alanların boş gelmemesi gerekir.
+func TestEditListingPost_ParsesMultipartForm(t *testing.T) {
+	mockSvc := newMockListingService()
+	mockSvc.listings[5] = &models.Listing{ID: 5, UserID: 1}
+	c := &ListingController{listingService: mockSvc}
+
+	r := chi.NewRouter()
+	r.Post("/listings/{id}/edit", c.EditListingPost)
+
+	req := newMultipartRequest(t, "/listings/5/edit", map[string]string{
+		"brand": "Toyota", "model": "Corolla", "year": "2020", "engine_volume": "1598", "damage_status": "bilinmiyor",
+	})
+	req = withUser(req, &models.UserDTO{ID: 1})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("beklenen 303, alınan %d", w.Code)
+	}
+	got := mockSvc.lastUpdate
+	if got.Brand != "Toyota" || got.Model != "Corolla" || got.Year != 2020 {
+		t.Errorf("Form alanları okunmalıydı: %+v", got)
+	}
+	if got.EngineVolume == nil || *got.EngineVolume != 1598 {
+		t.Errorf("Motor hacmi okunmalıydı: %v", got.EngineVolume)
+	}
+	if got.DamageStatus != models.DamageNone {
+		t.Errorf("Bilinmeyen hasar 'yok' kabul edilmeliydi: %q", got.DamageStatus)
+	}
+}
+
+// Giriş yapmış kullanıcıda detay şablonu eksiksiz render edilmeli ve kullanıcı adları kaçışlanmalı.
+func TestListingDetailPage_RendersForLoggedInUser(t *testing.T) {
+	mockSvc := newMockListingService()
+	mockSvc.listings[3] = &models.Listing{
+		ID: 3, UserID: 1, Brand: "BMW", Model: "320i", Status: "active",
+		StartingPrice: 100000, MinIncrement: 1000, CurrentBid: 120000, EndTime: time.Now().Add(time.Hour),
+	}
+	mockSvc.bids[3] = []models.Bid{{ID: 1, ListingID: 3, UserID: 2, UserName: "<img src=x onerror=alert(1)>", Amount: 120000}}
+
+	c, err := NewListingController(mockSvc, nil)
+	if err != nil {
+		t.Fatalf("Controller başlatılamadı: %v", err)
+	}
+	r := chi.NewRouter()
+	r.Get("/listings/{id}", c.ListingDetailPage)
+
+	req := withUser(httptest.NewRequest(http.MethodGet, "/listings/3", nil), &models.UserDTO{ID: 2, Name: "teklifci"})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "</html>") {
+		t.Fatal("Sayfa yarıda kesilmemeli (şablon hatası)")
+	}
+	if !regexp.MustCompile(`const currentUserId\s*=\s*2\s*;`).MatchString(body) {
+		t.Error("Giriş yapmış kullanıcının ID'si script'e yazılmalı")
+	}
+	if strings.Contains(body, "<img src=x") {
+		t.Error("Kullanıcı adı HTML olarak kaçışlanmalı")
 	}
 }

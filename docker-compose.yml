@@ -28,7 +28,7 @@ services:
     environment:
       - DATABASE_URL=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-car_auction_db}?sslmode=disable
       - SERVER_PORT=8080
-      - SERVER_ENV=development
+      - SERVER_ENV=${SERVER_ENV:-development}
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,6 +37,7 @@ services:
       - ./web:/app/web
 
   # Mikroservis 2: Açık Artırma Arka Plan Motoru (Auction Worker Microservice)
+  # Web servisiyle PostgreSQL LISTEN/NOTIFY üzerinden haberleşir.
   auction-worker:
     build: .
     container_name: car_auction_worker
@@ -44,10 +45,14 @@ services:
     command: ["/app/auction-worker"]
     environment:
       - DATABASE_URL=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-car_auction_db}?sslmode=disable
-      - SERVER_ENV=development
+      - SERVER_ENV=${SERVER_ENV:-development}
+      - AUCTION_WORKER_INTERVAL=${AUCTION_WORKER_INTERVAL:-5s}
     depends_on:
       postgres:
         condition: service_healthy
+      # Şema migration'larını web servisi uygular; worker ondan sonra başlar
+      web:
+        condition: service_started
 
 volumes:
   postgres_data:

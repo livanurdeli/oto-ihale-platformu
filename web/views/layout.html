@@ -27,19 +27,18 @@
           {{if .IsAuthenticated}}
             <li><a href="/my/bids" class="nav-item {{if eq .ActiveNav "my_bids"}}active{{end}}">Tekliflerim</a></li>
             <li><a href="/my/listings" class="nav-item {{if eq .ActiveNav "my_listings"}}active{{end}}">İlanlarım</a></li>
-            {{if .User.IsAdmin}}
-              <li><a href="/admin/dashboard" class="nav-item nav-admin {{if eq .ActiveNav "admin"}}active{{end}}">🛡️ Yönetici</a></li>
-            {{end}}
           {{end}}
         </ul>
       </nav>
 
       <div class="boxcars-actions">
         {{if .IsAuthenticated}}
-          <div class="user-pill">
-            <span class="user-avatar">👤</span>
-            <span class="user-email">{{.User.DisplayName}}</span>
-          </div>
+          <a href="/dashboard" style="text-decoration: none;">
+            <div class="user-pill" style="cursor: pointer;" title="Kullanıcı Paneli & Profil">
+              <span class="user-avatar">👤</span>
+              <span class="user-email">{{.User.DisplayName}}</span>
+            </div>
+          </a>
           <form action="/logout" method="POST" style="margin: 0;">
             <button type="submit" class="btn-boxcars-outline">Çıkış</button>
           </form>

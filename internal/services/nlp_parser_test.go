@@ -37,11 +37,35 @@ func TestParseListingText(t *testing.T) {
 			expectedFeat:   "",
 		},
 		{
-			name:           "Bilinmeyen / Standart Açıklama",
+			name:           "Bilinmeyen / Standart Açıklama (Hasar Yok kabul edilir)",
 			title:          "2020 Renault Megane Touch",
 			desc:           "Araç temiz kullanılmıştır detaylar telefonda verilecektir.",
-			expectedDamage: models.DamageUnknown,
+			expectedDamage: models.DamageNone,
 			expectedFeat:   "",
+		},
+		{
+			name:           "Değişensiz ifadesi değişen sayılmamalı",
+			title:          "2019 Clio",
+			desc:           "Boyasız değişensiz araç.",
+			expectedDamage: models.DamageNone,
+		},
+		{
+			name:           "Değişen yok ifadesi değişen sayılmamalı",
+			title:          "2019 Clio",
+			desc:           "Değişen yok, boya yok.",
+			expectedDamage: models.DamageNone,
+		},
+		{
+			name:           "Yıl + tramersiz ifadesi tramerli sayılmamalı",
+			title:          "Satılık Focus",
+			desc:           "2018 tramersiz",
+			expectedDamage: models.DamageFrameless,
+		},
+		{
+			name:           "Büyük harfli Türkçe metin",
+			title:          "SAHİBİNDEN",
+			desc:           "KAPUT DEĞİŞEN",
+			expectedDamage: models.DamageReplaced,
 		},
 	}
 
@@ -66,4 +90,3 @@ func TestParseListingText(t *testing.T) {
 		})
 	}
 }
-

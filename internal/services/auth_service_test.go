@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,94 +12,91 @@ import (
 )
 
 // ============================================================================
-// MOCK TANIMLAMALARI
+// SAHTE (MOCK) DEPOLAR
 // ============================================================================
 
-// mockUserRepo, UserRepositoryInterface'i taklit eder (gerçek DB gerekmez).
 type mockUserRepo struct {
-	users map[string]*models.User
+	users        map[int64]*models.User
+	nextID       int64
+	reportCounts map[int64]int
 }
 
 func newMockUserRepo() *mockUserRepo {
-	return &mockUserRepo{users: make(map[string]*models.User)}
+	return &mockUserRepo{users: make(map[int64]*models.User), nextID: 1, reportCounts: make(map[int64]int)}
 }
 
 func (m *mockUserRepo) CreateUser(ctx context.Context, name, email, passwordHash string) (*models.User, error) {
-	if _, exists := m.users[email]; exists {
-		return nil, repository.ErrEmailAlreadyTaken
+	for _, u := range m.users {
+		if strings.EqualFold(u.Email, email) {
+			return nil, repository.ErrEmailAlreadyTaken
+		}
+		if strings.EqualFold(u.Name, name) {
+			return nil, repository.ErrUsernameTaken
+		}
 	}
-	user := &models.User{ID: int64(len(m.users) + 1), Name: name, Email: email, PasswordHash: passwordHash}
-	m.users[email] = user
-	return user, nil
-}
-
-func (m *mockUserRepo) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	u, ok := m.users[email]
-	if !ok {
-		return nil, repository.ErrUserNotFound
-	}
+	u := &models.User{ID: m.nextID, Name: name, Email: strings.ToLower(email), PasswordHash: passwordHash}
+	m.users[u.ID] = u
+	m.nextID++
 	return u, nil
-}
-
-func (m *mockUserRepo) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
-	for _, u := range m.users {
-		if u.ID == id {
-			return u, nil
-		}
-	}
-	return nil, repository.ErrUserNotFound
-}
-
-func (m *mockUserRepo) GetUserStatus(ctx context.Context, id int64) (bool, error) {
-	for _, u := range m.users {
-		if u.ID == id {
-			return u.IsBlocked, nil
-		}
-	}
-	return false, repository.ErrUserNotFound
 }
 
 func (m *mockUserRepo) GetUserByUsernameOrEmail(ctx context.Context, identifier string) (*models.User, error) {
 	for _, u := range m.users {
-		if u.Email == identifier || u.Name == identifier {
+		if strings.EqualFold(u.Email, identifier) || strings.EqualFold(u.Name, identifier) {
 			return u, nil
 		}
 	}
 	return nil, repository.ErrUserNotFound
 }
 
-func (m *mockUserRepo) CreateInitialUserIfNotExists(ctx context.Context, name, email, passwordHash, role string) error {
-	if _, exists := m.users[email]; !exists {
-		m.users[email] = &models.User{ID: int64(len(m.users) + 1), Name: name, Email: email, PasswordHash: passwordHash, Role: role}
+func (m *mockUserRepo) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
+	if u, ok := m.users[id]; ok {
+		return u, nil
 	}
+	return nil, repository.ErrUserNotFound
+}
+
+func (m *mockUserRepo) UpdateProfile(ctx context.Context, id int64, name, email string) error {
+	u, ok := m.users[id]
+	if !ok {
+		return repository.ErrUserNotFound
+	}
+	u.Name, u.Email = name, email
 	return nil
 }
 
-func (m *mockUserRepo) ListUsers(ctx context.Context) ([]*models.UserDTO, error) {
-	var list []*models.UserDTO
-	for _, u := range m.users {
-		list = append(list, u.ToDTO())
+func (m *mockUserRepo) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	u, ok := m.users[id]
+	if !ok {
+		return repository.ErrUserNotFound
 	}
-	return list, nil
+	u.PasswordHash = passwordHash
+	return nil
 }
 
-func (m *mockUserRepo) SetUserBlocked(ctx context.Context, id int64, blocked bool) error {
-	for _, u := range m.users {
-		if u.ID == id {
-			u.IsBlocked = blocked
-			return nil
-		}
+func (m *mockUserRepo) DeleteUser(ctx context.Context, id int64) error {
+	if _, ok := m.users[id]; !ok {
+		return repository.ErrUserNotFound
 	}
-	return repository.ErrUserNotFound
+	delete(m.users, id)
+	return nil
 }
 
-// mockSessionRepo, SessionRepositoryInterface'i taklit eder.
+func (m *mockUserRepo) ReportUserFraud(ctx context.Context, reporterID, reportedUserID int64, reason string) (int, error) {
+	if _, ok := m.users[reportedUserID]; !ok {
+		return 0, repository.ErrUserNotFound
+	}
+	m.reportCounts[reportedUserID]++
+	return m.reportCounts[reportedUserID], nil
+}
+
 type mockSessionRepo struct {
 	sessions map[string]*models.Session
+	users    *mockUserRepo
 }
 
-func newMockSessionRepo() *mockSessionRepo {
-	return &mockSessionRepo{sessions: make(map[string]*models.Session)}
+func newMockSessionRepo(users *mockUserRepo) *mockSessionRepo {
+	return &mockSessionRepo{sessions: make(map[string]*models.Session), users: users}
 }
 
 func (m *mockSessionRepo) CreateSession(ctx context.Context, token string, userID int64, expiresAt time.Time) error {
@@ -108,12 +106,14 @@ func (m *mockSessionRepo) CreateSession(ctx context.Context, token string, userI
 
 func (m *mockSessionRepo) GetSession(ctx context.Context, token string) (*models.Session, error) {
 	sess, ok := m.sessions[token]
-	if !ok {
+	if !ok || time.Now().After(sess.ExpiresAt) {
 		return nil, repository.ErrSessionNotFound
 	}
-	if sess.IsExpired() {
+	u, err := m.users.GetUserByID(ctx, sess.UserID)
+	if err != nil {
 		return nil, repository.ErrSessionNotFound
 	}
+	sess.User = u.ToDTO()
 	return sess, nil
 }
 
@@ -122,148 +122,155 @@ func (m *mockSessionRepo) DeleteSession(ctx context.Context, token string) error
 	return nil
 }
 
-func (m *mockSessionRepo) DeleteExpiredSessions(ctx context.Context) error {
-	for k, s := range m.sessions {
-		if s.IsExpired() {
-			delete(m.sessions, k)
-		}
-	}
-	return nil
-}
-
-// ============================================================================
-// TESTLER
-// ============================================================================
+func (m *mockSessionRepo) DeleteExpiredSessions(ctx context.Context) error { return nil }
 
 func newTestAuthService() *AuthService {
-	return NewAuthService(newMockUserRepo(), newMockSessionRepo())
+	users := newMockUserRepo()
+	return NewAuthService(users, newMockSessionRepo(users))
 }
+
+const testIP = "10.0.0.1"
+
+// ============================================================================
+// KAYIT
+// ============================================================================
 
 func TestRegister_Success(t *testing.T) {
 	svc := newTestAuthService()
-	ctx := context.Background()
-
-	user, token, expiresAt, err := svc.Register(ctx, "TestKullanici", "yeni@test.com", "Sifre123!", "Sifre123!")
+	user, token, expiresAt, err := svc.Register(context.Background(), "TestKullanici", "yeni@test.com", "Sifre123!", "Sifre123!")
 	if err != nil {
 		t.Fatalf("Kayıt başarısız olmamalıydı: %v", err)
 	}
-	if user == nil {
-		t.Fatal("Kullanıcı nesnesi nil dönemez")
-	}
-	if token == "" {
-		t.Fatal("Session token boş dönemez")
+	if user == nil || token == "" {
+		t.Fatal("Kullanıcı ve token dönmeliydi")
 	}
 	if expiresAt.Before(time.Now()) {
 		t.Fatal("Token sona erme tarihi geçmişte olamaz")
 	}
 }
 
-func TestRegister_DuplicateEmail(t *testing.T) {
+func TestRegister_DuplicateEmailAndUsername(t *testing.T) {
 	svc := newTestAuthService()
 	ctx := context.Background()
+	_, _, _, _ = svc.Register(ctx, "Kullanici1", "ayni@test.com", "Sifre123!", "Sifre123!")
 
-	_, _, _, _ = svc.Register(ctx, "TestKullanici", "ayni@test.com", "Sifre123!", "Sifre123!")
-	_, _, _, err := svc.Register(ctx, "TestKullanici", "ayni@test.com", "Sifre123!", "Sifre123!")
-
-	if !errors.Is(err, ErrEmailAlreadyTaken) {
-		t.Errorf("Tekrar kayıt: ErrEmailAlreadyTaken bekleniyordu, alınan: %v", err)
+	if _, _, _, err := svc.Register(ctx, "Kullanici2", "ayni@test.com", "Sifre123!", "Sifre123!"); !errors.Is(err, ErrEmailAlreadyTaken) {
+		t.Errorf("ErrEmailAlreadyTaken bekleniyordu, alınan: %v", err)
+	}
+	if _, _, _, err := svc.Register(ctx, "kullanici1", "baska@test.com", "Sifre123!", "Sifre123!"); !errors.Is(err, ErrUsernameTaken) {
+		t.Errorf("ErrUsernameTaken bekleniyordu, alınan: %v", err)
 	}
 }
 
-func TestRegister_PasswordMismatch(t *testing.T) {
-	svc := newTestAuthService()
-	ctx := context.Background()
-
-	_, _, _, err := svc.Register(ctx, "TestKullanici", "user@test.com", "Sifre123!", "FarkliSifre!")
-	if !errors.Is(err, ErrPasswordsDoNotMatch) {
-		t.Errorf("ErrPasswordsDoNotMatch bekleniyordu, alınan: %v", err)
+func TestRegister_Validation(t *testing.T) {
+	tests := []struct {
+		name, username, email, pass, confirm string
+		want                                 error
+	}{
+		{"şifre uyuşmazlığı", "Kullanici", "a@test.com", "Sifre123!", "Farkli123!", ErrPasswordsDoNotMatch},
+		{"kısa şifre", "Kullanici", "a@test.com", "123", "123", ErrPasswordInvalid},
+		{"boş e-posta", "Kullanici", "", "Sifre123!", "Sifre123!", ErrRequiredFieldsEmpty},
+		{"geçersiz e-posta", "Kullanici", "a@<img src=x>", "Sifre123!", "Sifre123!", ErrInvalidEmail},
+		{"isimde @", "kul@nici", "a@test.com", "Sifre123!", "Sifre123!", ErrInvalidUsername},
+		{"isimde HTML", "<script>", "a@test.com", "Sifre123!", "Sifre123!", ErrInvalidUsername},
+		{"çok kısa isim", "ab", "a@test.com", "Sifre123!", "Sifre123!", ErrInvalidUsername},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestAuthService()
+			_, _, _, err := svc.Register(context.Background(), tt.username, tt.email, tt.pass, tt.confirm)
+			if !errors.Is(err, tt.want) {
+				t.Errorf("%v bekleniyordu, alınan: %v", tt.want, err)
+			}
+		})
 	}
 }
 
-func TestRegister_ShortPassword(t *testing.T) {
+// ============================================================================
+// GİRİŞ / ÇIKIŞ / OTURUM
+// ============================================================================
+
+func TestLogin_WithEmailAndUsername(t *testing.T) {
 	svc := newTestAuthService()
 	ctx := context.Background()
-
-	_, _, _, err := svc.Register(ctx, "TestKullanici", "user@test.com", "123", "123")
-	if !errors.Is(err, ErrPasswordInvalid) {
-		t.Errorf("ErrPasswordInvalid bekleniyordu, alınan: %v", err)
-	}
-}
-
-func TestRegister_EmptyFields(t *testing.T) {
-	svc := newTestAuthService()
-	ctx := context.Background()
-
-	_, _, _, err := svc.Register(ctx, "TestKullanici", "", "Sifre123!", "Sifre123!")
-	if !errors.Is(err, ErrRequiredFieldsEmpty) {
-		t.Errorf("ErrRequiredFieldsEmpty bekleniyordu, alınan: %v", err)
-	}
-}
-
-func TestLogin_Success(t *testing.T) {
-	svc := newTestAuthService()
-	ctx := context.Background()
-
-	// Önce kayıt ol
-	_, _, _, err := svc.Register(ctx, "TestKullanici", "giris@test.com", "Sifre123!", "Sifre123!")
-	if err != nil {
+	if _, _, _, err := svc.Register(ctx, "GirisKullanici", "giris@test.com", "Sifre123!", "Sifre123!"); err != nil {
 		t.Fatalf("Kayıt yapılamadı: %v", err)
 	}
 
-	// Giriş yap
-	user, token, _, err := svc.Login(ctx, "giris@test.com", "Sifre123!")
-	if err != nil {
-		t.Fatalf("Giriş başarısız: %v", err)
-	}
-	if user == nil || token == "" {
-		t.Fatal("Kullanıcı veya token boş dönemez")
+	for _, id := range []string{"giris@test.com", "GirisKullanici"} {
+		user, token, _, err := svc.Login(ctx, id, "Sifre123!", testIP)
+		if err != nil || user == nil || token == "" {
+			t.Errorf("%q ile giriş başarısız: %v", id, err)
+		}
 	}
 }
 
 func TestLogin_WrongPassword(t *testing.T) {
 	svc := newTestAuthService()
 	ctx := context.Background()
-
 	_, _, _, _ = svc.Register(ctx, "TestKullanici", "wrong@test.com", "DogruSifre!", "DogruSifre!")
-	_, _, _, err := svc.Login(ctx, "wrong@test.com", "YanlisSifre!")
 
-	if !errors.Is(err, ErrInvalidCredentials) {
+	if _, _, _, err := svc.Login(ctx, "wrong@test.com", "YanlisSifre!", testIP); !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("ErrInvalidCredentials bekleniyordu, alınan: %v", err)
 	}
 }
 
-func TestLogin_BlockedUser(t *testing.T) {
+func TestLogin_RateLimitIsPerClient(t *testing.T) {
 	svc := newTestAuthService()
 	ctx := context.Background()
+	_, _, _, _ = svc.Register(ctx, "Hedef", "hedef@test.com", "DogruSifre!", "DogruSifre!")
 
-	// Kullanıcı oluştur ve engelle
-	_, _, _, _ = svc.Register(ctx, "TestKullanici", "blocked@test.com", "Sifre123!", "Sifre123!")
-	user, _ := svc.userRepo.GetUserByEmail(ctx, "blocked@test.com")
-	user.IsBlocked = true
+	// Saldırgan 5 kez yanlış şifre dener ve kendi IP'si için kilitlenir
+	for i := 0; i < maxLoginAttempts; i++ {
+		_, _, _, _ = svc.Login(ctx, "hedef@test.com", "Yanlis!!", "6.6.6.6")
+	}
+	if _, _, _, err := svc.Login(ctx, "hedef@test.com", "DogruSifre!", "6.6.6.6"); !errors.Is(err, ErrTooManyLoginAttempts) {
+		t.Errorf("Saldırgan IP'si kilitlenmeliydi, alınan: %v", err)
+	}
 
-	_, _, _, err := svc.Login(ctx, "blocked@test.com", "Sifre123!")
-	if !errors.Is(err, ErrUserIsBlocked) {
-		t.Errorf("ErrUserIsBlocked bekleniyordu, alınan: %v", err)
+	// Gerçek kullanıcı kendi IP'sinden giriş yapabilmelidir (hesap kilitleme saldırısı engellenir)
+	if _, _, _, err := svc.Login(ctx, "hedef@test.com", "DogruSifre!", testIP); err != nil {
+		t.Errorf("Gerçek kullanıcı kilitlenmemeliydi: %v", err)
 	}
 }
 
-func TestLogout(t *testing.T) {
+func TestLogin_LockExpires(t *testing.T) {
 	svc := newTestAuthService()
 	ctx := context.Background()
+	_, _, _, _ = svc.Register(ctx, "Kullanici", "k@test.com", "DogruSifre!", "DogruSifre!")
 
-	_, token, _, err := svc.Register(ctx, "TestKullanici", "logout@test.com", "Sifre123!", "Sifre123!")
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	for i := 0; i < maxLoginAttempts; i++ {
+		_, _, _, _ = svc.Login(ctx, "k@test.com", "Yanlis!!", testIP)
+	}
+
+	svc.now = func() time.Time { return now.Add(loginLockWindow + time.Minute) }
+	if _, _, _, err := svc.Login(ctx, "k@test.com", "DogruSifre!", testIP); err != nil {
+		t.Errorf("Kilit süresi dolunca giriş yapılabilmeliydi: %v", err)
+	}
+	if len(svc.failedAttempts) != 0 {
+		t.Errorf("Süresi dolan deneme kayıtları temizlenmeliydi, kalan: %d", len(svc.failedAttempts))
+	}
+}
+
+func TestValidateSession_ReturnsNameAndLogoutInvalidates(t *testing.T) {
+	svc := newTestAuthService()
+	ctx := context.Background()
+	_, token, _, err := svc.Register(ctx, "OturumKullanici", "oturum@test.com", "Sifre123!", "Sifre123!")
 	if err != nil {
 		t.Fatalf("Kayıt yapılamadı: %v", err)
 	}
 
-	// Logout
+	user, err := svc.ValidateSession(ctx, token)
+	if err != nil || user.Name != "OturumKullanici" {
+		t.Fatalf("Oturum kullanıcı adını içermeliydi: %+v, %v", user, err)
+	}
+
 	if err := svc.Logout(ctx, token); err != nil {
 		t.Fatalf("Logout hatası: %v", err)
 	}
-
-	// Token geçersiz olmalı
-	_, err = svc.ValidateSession(ctx, token)
-	if err == nil {
-		t.Error("Logout sonrası session geçersiz olmalıydı")
+	if _, err := svc.ValidateSession(ctx, token); err == nil {
+		t.Error("Logout sonrası oturum geçersiz olmalıydı")
 	}
 }

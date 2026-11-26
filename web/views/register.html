@@ -12,9 +12,9 @@
     <form method="POST" action="/register" style="display: flex; flex-direction: column; gap: 1.2rem;">
       <div>
         <label for="name" style="display: block; font-size: 0.9rem; font-weight: 600; color: #334155; margin-bottom: 0.4rem;">
-          Ad Soyad / Kullanıcı Adı
+          Kullanıcı Adı
         </label>
-        <input type="text" id="name" name="name" required placeholder="ör. Ahmet Yılmaz"
+        <input type="text" id="name" name="name" required minlength="3" maxlength="50" pattern="[^@<>]+" title="3-50 karakter, '@' içeremez" placeholder="ör. ahmet_yilmaz"
           style="width: 100%; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: var(--radius-sm); font-size: 0.95rem; outline: none;"
           onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#cbd5e1'">
       </div>

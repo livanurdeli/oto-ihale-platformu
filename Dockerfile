@@ -6,10 +6,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server cmd/server/main.go
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/auction-worker cmd/auction-worker/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/auction-worker ./cmd/auction-worker
 
-FROM alpine:latest
+# Sürümü sabitlenmiş taban imaj (tekrarlanabilir derlemeler için "latest" kullanılmaz)
+FROM alpine:3.21
 WORKDIR /app
 RUN apk --no-cache add ca-certificates
 

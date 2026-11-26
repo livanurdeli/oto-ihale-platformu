@@ -49,7 +49,7 @@ func (m *mockAuthService) Register(ctx context.Context, name, email, password, p
 	return u, token, expiresAt, nil
 }
 
-func (m *mockAuthService) Login(ctx context.Context, email, password string) (*models.UserDTO, string, time.Time, error) {
+func (m *mockAuthService) Login(ctx context.Context, email, password, clientKey string) (*models.UserDTO, string, time.Time, error) {
 	u, exists := m.users[email]
 	if !exists || password != "DogruSifre!" {
 		return nil, "", time.Time{}, services.ErrInvalidCredentials
@@ -72,32 +72,10 @@ func (m *mockAuthService) ValidateSession(ctx context.Context, token string) (*m
 	return u, nil
 }
 
-func (m *mockAuthService) ListUsers(ctx context.Context) ([]*models.UserDTO, error) {
-	var list []*models.UserDTO
-	for _, u := range m.users {
-		list = append(list, u)
-	}
-	return list, nil
-}
-
-func (m *mockAuthService) SetUserBlocked(ctx context.Context, id int64, blocked bool) error {
-	for _, u := range m.users {
-		if u.ID == id {
-			u.IsBlocked = blocked
-			return nil
-		}
-	}
-	return nil
-}
-
-// ============================================================================
-// TESTLER
-// ============================================================================
-
 func setupAuthController(t *testing.T) *AuthController {
 	t.Helper()
 	svc := newMockAuthService()
-	c, err := NewAuthController(svc)
+	c, err := NewAuthController(svc, false)
 	if err != nil {
 		t.Fatalf("AuthController başlatılamadı: %v", err)
 	}
@@ -212,4 +190,60 @@ func TestRegisterPost_DuplicateEmail(t *testing.T) {
 }
 
 // userContextKeyForTest, test içinde context key olarak kullanılır.
-var userContextKeyForTest = "authenticated_user"
+func TestLoginPost_RedirectsToSafeTarget(t *testing.T) {
+	tests := []struct {
+		redirect string
+		want     string
+	}{
+		{"/listings/42", "/listings/42"},
+		{"//evil.com", "/listings"},
+		{"/\\evil.com", "/listings"},
+		{"https://evil.com", "/listings"},
+		{"", "/listings"},
+	}
+	for _, tt := range tests {
+		c := setupAuthController(t)
+		mockSvc := c.authService.(*mockAuthService)
+		mockSvc.users["test@test.com"] = &models.UserDTO{ID: 1, Email: "test@test.com"}
+
+		form := url.Values{}
+		form.Set("email", "test@test.com")
+		form.Set("password", "DogruSifre!")
+		form.Set("redirect", tt.redirect)
+
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		c.LoginPost(w, req)
+
+		if got := w.Header().Get("Location"); got != tt.want {
+			t.Errorf("redirect=%q: Location %q, beklenen %q", tt.redirect, got, tt.want)
+		}
+	}
+}
+
+func TestLoginPage_KeepsRedirectInForm(t *testing.T) {
+	c := setupAuthController(t)
+	req := httptest.NewRequest(http.MethodGet, "/login?redirect=%2Flistings%2F7", nil)
+	w := httptest.NewRecorder()
+	c.LoginPage(w, req)
+
+	if !strings.Contains(w.Body.String(), `name="redirect" value="/listings/7"`) {
+		t.Error("Giriş formu redirect hedefini gizli alan olarak taşımalı")
+	}
+}
+
+func TestLogout_WithBearerToken(t *testing.T) {
+	c := setupAuthController(t)
+	mockSvc := c.authService.(*mockAuthService)
+	mockSvc.sessions["api-token"] = &models.UserDTO{ID: 1}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer api-token")
+	w := httptest.NewRecorder()
+	c.Logout(w, req)
+
+	if _, ok := mockSvc.sessions["api-token"]; ok {
+		t.Error("Bearer token ile çıkışta oturum silinmeliydi")
+	}
+}

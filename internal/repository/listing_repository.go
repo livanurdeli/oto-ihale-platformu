@@ -1,5 +1,13 @@
 package repository
 
+// ============================================================================
+// DOSYA AMACI: İlan ve Açık Artırma Veri Deposu
+// ============================================================================
+// İlanların, fotoğrafların ve tekliflerin PostgreSQL üzerindeki tüm okuma/yazma
+// işlemlerini yürütür. Teklif verme işlemi satır kilidi (SELECT ... FOR UPDATE)
+// ile yarış durumlarına (race condition) karşı korunur.
+// ============================================================================
+
 import (
 	"context"
 	"database/sql"
@@ -12,9 +20,6 @@ import (
 	"car-auction-platform/internal/models"
 )
 
-// ============================================================================
-// HATA TANIMLARI
-// ============================================================================
 var (
 	ErrListingNotFound     = errors.New("ilan bulunamadı")
 	ErrAuctionEnded        = errors.New("bu açık artırma sona ermiştir, artık teklif verilemez")
@@ -22,187 +27,186 @@ var (
 	ErrBidTooLow           = errors.New("verilen teklif mevcut minimum geçerli tutardan düşük olamaz")
 )
 
-// ListingRepository, PostgreSQL listing deposudur.
-type ListingRepository struct {
-	db *sql.DB
+// listingColumns, ilan sorgularında ortak kullanılan sütun listesidir (scanListingRow ile aynı sırada).
+const listingColumns = `
+	l.id, l.user_id, l.brand, l.model, l.year, l.mileage, l.fuel_type, l.transmission, l.city,
+	COALESCE(l.description, ''), l.damage_status, l.status, l.engine_volume, l.estimated_price,
+	l.starting_price, l.min_increment, l.end_time, l.current_bid, l.winner_user_id, l.winning_bid,
+	l.created_at, l.updated_at`
+
+// rowScanner, *sql.Row ve *sql.Rows için ortak Scan arayüzüdür.
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
-// NewListingRepository yeni bir ListingRepository örneği döner.
-func NewListingRepository(db *sql.DB) *ListingRepository {
-	return &ListingRepository{db: db}
-}
-
-// BeginTx, transaction başlatır.
-func (r *ListingRepository) BeginTx(ctx context.Context) (*sql.Tx, error) {
-	return r.db.BeginTx(ctx, nil)
-}
-
-// ============================================================================
-// OLUŞTURMA & GÜNCELLEME
-// ============================================================================
-
-// CreateListing, transaction içinde yeni ilan ve açık artırma bilgilerini ekler.
-func (r *ListingRepository) CreateListing(ctx context.Context, tx *sql.Tx, input models.ListingCreateInput, userID int64) (*models.Listing, error) {
-	durationDays := input.DurationDays
-	if durationDays <= 0 {
-		durationDays = 3 // Varsayılan 3 gün
-	}
-
-	endTime := input.EndTime
-	if endTime.IsZero() {
-		endTime = time.Now().Add(time.Duration(durationDays) * 24 * time.Hour)
-	}
-
-	startingPrice := input.StartingPrice
-	if startingPrice <= 0 {
-		startingPrice = 100000
-	}
-
-	minIncrement := input.MinIncrement
-	if minIncrement <= 0 {
-		minIncrement = 1000
-	}
-
-	damageStatus := string(input.DamageStatus)
-	if damageStatus == "" || damageStatus == "bilinmiyor" {
-		damageStatus = "yok"
-	}
-
-	query := `
-		INSERT INTO listings
-			(user_id, brand, model, year, mileage, fuel_type, transmission, city, description,
-			 damage_status, status, starting_price, min_increment, end_time, current_bid, estimated_price, created_at, updated_at)
-		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, 0, $14, NOW(), NOW())
-		RETURNING id, user_id, brand, model, year, mileage, fuel_type, transmission, city,
-		          description, damage_status, status, engine_volume, estimated_price,
-		          starting_price, min_increment, end_time, current_bid, winner_user_id, winning_bid,
-		          created_at, updated_at
-	`
-	var row *sql.Row
-	if tx != nil {
-		row = tx.QueryRowContext(ctx, query,
-			userID, input.Brand, input.Model, input.Year, input.Mileage,
-			input.FuelType, input.Transmission, input.City, input.Description,
-			damageStatus, startingPrice, minIncrement, endTime, input.EstimatedPrice,
-		)
-	} else {
-		row = r.db.QueryRowContext(ctx, query,
-			userID, input.Brand, input.Model, input.Year, input.Mileage,
-			input.FuelType, input.Transmission, input.City, input.Description,
-			damageStatus, startingPrice, minIncrement, endTime, input.EstimatedPrice,
-		)
-	}
-	return scanListing(row)
-}
-
-// UpdateListing, mevcut ilanı günceller.
-func (r *ListingRepository) UpdateListing(ctx context.Context, id int64, input models.ListingCreateInput) (*models.Listing, error) {
-	damageStatus := string(input.DamageStatus)
-	if damageStatus == "" || damageStatus == "bilinmiyor" {
-		damageStatus = "yok"
-	}
-
-	query := `
-		UPDATE listings SET
-			brand=$1, model=$2, year=$3, mileage=$4, fuel_type=$5, transmission=$6,
-			city=$7, description=$8, damage_status=$9, updated_at=NOW()
-		WHERE id=$10
-		RETURNING id, user_id, brand, model, year, mileage, fuel_type, transmission, city,
-		          description, damage_status, status, engine_volume, estimated_price,
-		          starting_price, min_increment, end_time, current_bid, winner_user_id, winning_bid,
-		          created_at, updated_at
-	`
-	row := r.db.QueryRowContext(ctx, query,
-		input.Brand, input.Model, input.Year, input.Mileage,
-		input.FuelType, input.Transmission, input.City, input.Description,
-		damageStatus, id,
-	)
-	return scanListing(row)
-}
-
-// DeleteListing, ilanı siler.
-func (r *ListingRepository) DeleteListing(ctx context.Context, id int64) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM listings WHERE id=$1`, id)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrListingNotFound
-	}
-	return nil
-}
-
-// ============================================================================
-// OKUMA
-// ============================================================================
-
-// GetListingByID, tek ilan ve fotoğraflarını, teklif geçmişini döner.
-func (r *ListingRepository) GetListingByID(ctx context.Context, id int64) (*models.Listing, error) {
-	query := `
-		SELECT l.id, l.user_id, l.brand, l.model, l.year, l.mileage, l.fuel_type, l.transmission, l.city,
-		       l.description, l.damage_status, l.status, l.engine_volume, l.estimated_price,
-		       l.starting_price, l.min_increment, l.end_time, l.current_bid, l.winner_user_id, l.winning_bid,
-		       COALESCE(w.email, '') AS winner_email,
-		       COALESCE(w.name, '') AS winner_name,
-		       COALESCE(u.name, '') AS owner_name,
-		       COALESCE(u.email, '') AS owner_email,
-		       l.created_at, l.updated_at
-		FROM listings l
-		LEFT JOIN users w ON l.winner_user_id = w.id
-		LEFT JOIN users u ON l.user_id = u.id
-		WHERE l.id = $1
-	`
-	row := r.db.QueryRowContext(ctx, query, id)
-
+func scanListingRow(s rowScanner, extra ...any) (*models.Listing, error) {
 	var l models.Listing
 	var dmg string
-	var winnerEmail, winnerName, ownerName, ownerEmail string
-	err := row.Scan(
+	dest := []any{
 		&l.ID, &l.UserID, &l.Brand, &l.Model, &l.Year, &l.Mileage, &l.FuelType,
 		&l.Transmission, &l.City, &l.Description, &dmg, &l.Status,
 		&l.EngineVolume, &l.EstimatedPrice,
 		&l.StartingPrice, &l.MinIncrement, &l.EndTime, &l.CurrentBid,
-		&l.WinnerUserID, &l.WinningBid, &winnerEmail, &winnerName, &ownerName, &ownerEmail,
+		&l.WinnerUserID, &l.WinningBid,
 		&l.CreatedAt, &l.UpdatedAt,
-	)
-	if err != nil {
+	}
+	if err := s.Scan(append(dest, extra...)...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrListingNotFound
 		}
 		return nil, err
 	}
 	l.DamageStatus = models.DamageStatus(dmg)
-	l.WinnerEmail = winnerEmail
-	l.WinnerName = winnerName
-	l.OwnerName = ownerName
-	l.OwnerEmail = ownerEmail
-
-	photos, err := r.GetPhotosByListingID(ctx, l.ID)
-	if err != nil {
-		return nil, err
-	}
-	l.Photos = photos
-	if len(photos) > 0 {
-		l.CoverPhotoURL = photos[0].PhotoURL
-	}
-
-	bids, err := r.GetBidsByListingID(ctx, l.ID)
-	if err == nil {
-		l.Bids = bids
-	}
-
 	return &l, nil
 }
 
-// ListListings, filtre ve sayfalama uygulayarak ilanları döner.
+type ListingRepository struct {
+	db *sql.DB
+}
+
+func NewListingRepository(db *sql.DB) *ListingRepository {
+	return &ListingRepository{db: db}
+}
+
+func (r *ListingRepository) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	return r.db.BeginTx(ctx, nil)
+}
+
+// queryRower, *sql.DB ve *sql.Tx için ortak tek satır sorgu arayüzüdür.
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (r *ListingRepository) execer(tx *sql.Tx) queryRower {
+	if tx != nil {
+		return tx
+	}
+	return r.db
+}
+
+// ============================================================================
+// İLAN CRUD
+// ============================================================================
+
+// CreateListing, yeni ilanı kaydeder. Varsayılan değerler ve doğrulama servis katmanındadır.
+func (r *ListingRepository) CreateListing(ctx context.Context, tx *sql.Tx, input models.ListingCreateInput, userID int64) (*models.Listing, error) {
+	query := `
+		INSERT INTO listings AS l
+			(user_id, brand, model, year, mileage, fuel_type, transmission, city, description,
+			 damage_status, status, engine_volume, starting_price, min_increment, end_time,
+			 current_bid, estimated_price, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14, 0, $15, NOW(), NOW())
+		RETURNING ` + listingColumns
+	row := r.execer(tx).QueryRowContext(ctx, query,
+		userID, input.Brand, input.Model, input.Year, input.Mileage,
+		input.FuelType, input.Transmission, input.City, input.Description,
+		string(input.DamageStatus), input.EngineVolume, input.StartingPrice, input.MinIncrement,
+		input.EndTime, input.EstimatedPrice,
+	)
+	return scanListingRow(row)
+}
+
+// UpdateListing, ilan bilgilerini ve açık artırma koşullarını günceller.
+// (Teklif almış ilanda fiyat koşullarının değişmemesi kuralı servis katmanında denetlenir.)
+func (r *ListingRepository) UpdateListing(ctx context.Context, id int64, input models.ListingCreateInput) (*models.Listing, error) {
+	query := `
+		UPDATE listings AS l SET
+			brand = $1, model = $2, year = $3, mileage = $4, fuel_type = $5, transmission = $6,
+			city = $7, description = $8, damage_status = $9, engine_volume = $10,
+			starting_price = $11, min_increment = $12, estimated_price = $13, updated_at = NOW()
+		WHERE l.id = $14
+		RETURNING ` + listingColumns
+	row := r.db.QueryRowContext(ctx, query,
+		input.Brand, input.Model, input.Year, input.Mileage,
+		input.FuelType, input.Transmission, input.City, input.Description,
+		string(input.DamageStatus), input.EngineVolume,
+		input.StartingPrice, input.MinIncrement, input.EstimatedPrice, id,
+	)
+	return scanListingRow(row)
+}
+
+func (r *ListingRepository) DeleteListing(ctx context.Context, id int64) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM listings WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrListingNotFound
+	}
+	return nil
+}
+
+// GetListingByID, ilanı sahibi, kazananı, fotoğrafları ve teklifleriyle birlikte getirir.
+func (r *ListingRepository) GetListingByID(ctx context.Context, id int64) (*models.Listing, error) {
+	query := `
+		SELECT ` + listingColumns + `,
+		       COALESCE(w.name, '') AS winner_name,
+		       COALESCE(u.name, '') AS owner_name
+		FROM listings l
+		LEFT JOIN users w ON l.winner_user_id = w.id
+		LEFT JOIN users u ON l.user_id = u.id
+		WHERE l.id = $1
+	`
+	var winnerName, ownerName string
+	l, err := scanListingRow(r.db.QueryRowContext(ctx, query, id), &winnerName, &ownerName)
+	if err != nil {
+		return nil, err
+	}
+	l.WinnerName = winnerName
+	l.OwnerName = ownerName
+
+	if l.Photos, err = r.GetPhotosByListingID(ctx, l.ID); err != nil {
+		return nil, err
+	}
+	if len(l.Photos) > 0 {
+		l.CoverPhotoURL = l.Photos[0].PhotoURL
+	}
+
+	if l.Bids, err = r.GetBidsByListingID(ctx, l.ID); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+const coverPhotoJoin = `
+	LEFT JOIN LATERAL (
+		SELECT photo_url FROM listing_photos
+		WHERE listing_id = l.id
+		ORDER BY display_order ASC, id ASC
+		LIMIT 1
+	) cp ON true`
+
+func (r *ListingRepository) queryListings(ctx context.Context, query string, args ...any) ([]*models.Listing, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var listings []*models.Listing
+	for rows.Next() {
+		var cover string
+		l, err := scanListingRow(rows, &cover)
+		if err != nil {
+			return nil, err
+		}
+		l.CoverPhotoURL = cover
+		listings = append(listings, l)
+	}
+	return listings, rows.Err()
+}
+
+// ListListings, filtrelere uyan ilanları sayfalanmış olarak döner.
 func (r *ListingRepository) ListListings(ctx context.Context, filter models.ListingFilter) (*models.Page[*models.Listing], error) {
 	where, args := BuildListingFilter(filter)
 
-	countQuery := `SELECT COUNT(*) FROM listings l ` + where
 	var total int
-	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM listings l `+where, args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("ilan sayısı alınamadı: %w", err)
 	}
 
@@ -219,139 +223,59 @@ func (r *ListingRepository) ListListings(ctx context.Context, filter models.List
 	}
 	offset := (page - 1) * perPage
 
-	limitArgIdx := len(args) + 1
-	offsetArgIdx := len(args) + 2
-	args = append(args, perPage, offset)
-
 	dataQuery := fmt.Sprintf(`
-		SELECT
-			l.id, l.user_id, l.brand, l.model, l.year, l.mileage, l.fuel_type, l.transmission, l.city,
-			l.description, l.damage_status, l.status, l.engine_volume, l.estimated_price,
-			l.starting_price, l.min_increment, l.end_time, l.current_bid, l.winner_user_id, l.winning_bid,
-			l.created_at, l.updated_at,
-			COALESCE(cp.photo_url, '') AS cover_photo_url
+		SELECT %s, COALESCE(cp.photo_url, '') AS cover_photo_url
 		FROM listings l
-		LEFT JOIN LATERAL (
-			SELECT photo_url FROM listing_photos
-			WHERE listing_id = l.id
-			ORDER BY display_order ASC, id ASC
-			LIMIT 1
-		) cp ON true
+		%s
 		%s
 		ORDER BY l.created_at DESC, l.id DESC
 		LIMIT $%d OFFSET $%d
-	`, where, limitArgIdx, offsetArgIdx)
+	`, listingColumns, coverPhotoJoin, where, len(args)+1, len(args)+2)
 
-	rows, err := r.db.QueryContext(ctx, dataQuery, args...)
+	listings, err := r.queryListings(ctx, dataQuery, append(args, perPage, offset)...)
 	if err != nil {
 		return nil, fmt.Errorf("ilan listesi alınamadı: %w", err)
 	}
-	defer rows.Close()
 
-	var listings []*models.Listing
-	for rows.Next() {
-		var l models.Listing
-		var dmg string
-		err := rows.Scan(
-			&l.ID, &l.UserID, &l.Brand, &l.Model, &l.Year, &l.Mileage, &l.FuelType,
-			&l.Transmission, &l.City, &l.Description, &dmg, &l.Status,
-			&l.EngineVolume, &l.EstimatedPrice,
-			&l.StartingPrice, &l.MinIncrement, &l.EndTime, &l.CurrentBid,
-			&l.WinnerUserID, &l.WinningBid,
-			&l.CreatedAt, &l.UpdatedAt,
-			&l.CoverPhotoURL,
-		)
-		if err != nil {
-			return nil, err
-		}
-		l.DamageStatus = models.DamageStatus(dmg)
-		listings = append(listings, &l)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	totalPages := (total + perPage - 1) / perPage
 	return &models.Page[*models.Listing]{
 		Items:      listings,
 		Total:      total,
 		Page:       page,
 		PerPage:    perPage,
-		TotalPages: totalPages,
+		TotalPages: (total + perPage - 1) / perPage,
 	}, nil
 }
 
-// GetListingsByUserID kullanıcının kendi ilanlarını döner.
 func (r *ListingRepository) GetListingsByUserID(ctx context.Context, userID int64) ([]*models.Listing, error) {
 	query := `
-		SELECT
-			l.id, l.user_id, l.brand, l.model, l.year, l.mileage, l.fuel_type, l.transmission, l.city,
-			l.description, l.damage_status, l.status, l.engine_volume, l.estimated_price,
-			l.starting_price, l.min_increment, l.end_time, l.current_bid, l.winner_user_id, l.winning_bid,
-			l.created_at, l.updated_at,
-			COALESCE(cp.photo_url, '') AS cover_photo_url
+		SELECT ` + listingColumns + `, COALESCE(cp.photo_url, '') AS cover_photo_url
 		FROM listings l
-		LEFT JOIN LATERAL (
-			SELECT photo_url FROM listing_photos
-			WHERE listing_id = l.id
-			ORDER BY display_order ASC, id ASC
-			LIMIT 1
-		) cp ON true
+		` + coverPhotoJoin + `
 		WHERE l.user_id = $1
 		ORDER BY l.created_at DESC, l.id DESC
 	`
-	rows, err := r.db.QueryContext(ctx, query, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var listings []*models.Listing
-	for rows.Next() {
-		var l models.Listing
-		var dmg string
-		err := rows.Scan(
-			&l.ID, &l.UserID, &l.Brand, &l.Model, &l.Year, &l.Mileage, &l.FuelType,
-			&l.Transmission, &l.City, &l.Description, &dmg, &l.Status,
-			&l.EngineVolume, &l.EstimatedPrice,
-			&l.StartingPrice, &l.MinIncrement, &l.EndTime, &l.CurrentBid,
-			&l.WinnerUserID, &l.WinningBid,
-			&l.CreatedAt, &l.UpdatedAt,
-			&l.CoverPhotoURL,
-		)
-		if err != nil {
-			return nil, err
-		}
-		l.DamageStatus = models.DamageStatus(dmg)
-		listings = append(listings, &l)
-	}
-	return listings, rows.Err()
+	return r.queryListings(ctx, query, userID)
 }
 
 // ============================================================================
-// HAFTA 4: AÇIK ARTIRMA ÇEKİRDEĞİ (CONCURRENCY & TRANSACTION GÜVENLİĞİ)
+// AÇIK ARTIRMA (TEKLİF) MOTORU
 // ============================================================================
 
-// PlaceBid, iki kişi aynı anda teklif verdiğinde race condition ve çakışmayı
-// önlemek için PESSIMISTIC LOCKING ('FOR UPDATE') ve DATABASE TRANSACTION kullanır.
+// PlaceBid, ilan satırını kilitleyerek (FOR UPDATE) teklifi doğrular ve kaydeder.
+// Aynı anda gelen teklifler sırayla işlenir; böylece iki kişi aynı tutarla lider olamaz.
 func (r *ListingRepository) PlaceBid(ctx context.Context, listingID, userID int64, amount float64) (*models.Bid, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("transaction başlatılamadı: %w", err)
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	defer func() { _ = tx.Rollback() }()
 
-	// 1. İlan kaydını kilitle (Pessimistic Row Lock: SELECT ... FOR UPDATE)
-	// Başka bir transaction bu satırı okuyup teklif yazmaya çalışırsa bu kilit kalkana kadar bekletilir.
-	var ownerID int64
-	var status string
-	var endTime time.Time
-	var startingPrice float64
-	var minIncrement float64
-	var currentBid float64
-
+	var (
+		ownerID                                 int64
+		status                                  string
+		endTime                                 time.Time
+		startingPrice, minIncrement, currentBid float64
+	)
 	lockQuery := `
 		SELECT user_id, status, end_time, starting_price, min_increment, current_bid
 		FROM listings
@@ -368,77 +292,53 @@ func (r *ListingRepository) PlaceBid(ctx context.Context, listingID, userID int6
 		return nil, fmt.Errorf("ilan kilitlenemedi: %w", err)
 	}
 
-	// 2. Kural: Süresi dolmuş mu veya aktif değil mi?
 	if status != "active" || !time.Now().Before(endTime) {
 		return nil, ErrAuctionEnded
 	}
-
-	// 3. Kural: Kendi ilanına teklif veremez!
 	if ownerID == userID {
 		return nil, ErrCannotBidOwnListing
 	}
 
-	// 4. Kural: Teklif tutarı geçerli mi?
-	// Not: float64 karşılaştırmasında küçük precision hatalarını tolere etmek için
-	// math.Round ile tam sayıya yuvarlayarak karşılaştırma yapıyoruz.
-	roundedAmount := math.Round(amount)
+	// Teklifler tam TL olarak işlenir
+	amount = math.Round(amount)
 	if currentBid > 0 {
 		minRequired := math.Round(currentBid + minIncrement)
-		if roundedAmount < minRequired {
+		if amount < minRequired {
 			return nil, fmt.Errorf("%w: En az %.0f TL teklif vermelisiniz (Mevcut: %.0f TL + Min Artış: %.0f TL)", ErrBidTooLow, minRequired, currentBid, minIncrement)
 		}
-		amount = roundedAmount
-	} else {
-		rounded := math.Round(startingPrice)
-		if roundedAmount < rounded {
-			return nil, fmt.Errorf("%w: Başlangıç fiyatı olan en az %.0f TL teklif vermelisiniz", ErrBidTooLow, startingPrice)
-		}
-		amount = roundedAmount
+	} else if amount < math.Round(startingPrice) {
+		return nil, fmt.Errorf("%w: Başlangıç fiyatı olan en az %.0f TL teklif vermelisiniz", ErrBidTooLow, startingPrice)
 	}
 
-	// 5. Teklifi ekle
-	insertBidQuery := `
+	bid := models.Bid{ListingID: listingID, UserID: userID, Amount: amount}
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO bids (listing_id, user_id, amount, created_at)
 		VALUES ($1, $2, $3, NOW())
 		RETURNING id, created_at
-	`
-	var bid models.Bid
-	bid.ListingID = listingID
-	bid.UserID = userID
-	bid.Amount = amount
-
-	err = tx.QueryRowContext(ctx, insertBidQuery, listingID, userID, amount).Scan(&bid.ID, &bid.CreatedAt)
+	`, listingID, userID, amount).Scan(&bid.ID, &bid.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("teklif kaydedilemedi: %w", err)
 	}
 
-	// 6. Listings tablosundaki current_bid alanını güncelle
-	updateListingQuery := `
-		UPDATE listings
-		SET current_bid = $1, updated_at = NOW()
-		WHERE id = $2
-	`
-	_, err = tx.ExecContext(ctx, updateListingQuery, amount, listingID)
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE listings SET current_bid = $1, updated_at = NOW() WHERE id = $2`, amount, listingID); err != nil {
 		return nil, fmt.Errorf("ilan güncel teklifi güncellenemedi: %w", err)
 	}
 
-	// 7. Transaction Commit
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("transaction tamamlanamadı: %w", err)
 	}
-
 	return &bid, nil
 }
 
-// GetBidsByListingID, ilana ait tüm teklifleri en yüksekten en düşüğe döner.
+// GetBidsByListingID, ilana verilen teklifleri teklif sahibinin kullanıcı adıyla birlikte getirir.
+// E-posta adresleri herkese açık listelerde gösterilmez.
 func (r *ListingRepository) GetBidsByListingID(ctx context.Context, listingID int64) ([]models.Bid, error) {
 	query := `
-		SELECT b.id, b.listing_id, b.user_id, u.email, COALESCE(u.name, '') AS user_name, b.amount, b.created_at
+		SELECT b.id, b.listing_id, b.user_id, u.name, b.amount, b.created_at
 		FROM bids b
 		JOIN users u ON b.user_id = u.id
 		WHERE b.listing_id = $1
-		ORDER BY b.amount DESC, b.created_at DESC
+		ORDER BY b.amount DESC, b.created_at ASC
 	`
 	rows, err := r.db.QueryContext(ctx, query, listingID)
 	if err != nil {
@@ -449,46 +349,25 @@ func (r *ListingRepository) GetBidsByListingID(ctx context.Context, listingID in
 	var bids []models.Bid
 	for rows.Next() {
 		var b models.Bid
-		err := rows.Scan(&b.ID, &b.ListingID, &b.UserID, &b.UserEmail, &b.UserName, &b.Amount, &b.CreatedAt)
-		if err != nil {
+		if err := rows.Scan(&b.ID, &b.ListingID, &b.UserID, &b.UserName, &b.Amount, &b.CreatedAt); err != nil {
 			return nil, err
 		}
-		// Gizlilik: E-posta adresini maskele (a***@domain.com)
-		b.UserEmail = maskUserEmail(b.UserEmail)
 		bids = append(bids, b)
 	}
 	return bids, rows.Err()
 }
 
-func maskUserEmail(email string) string {
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 {
-		return email
-	}
-	name := parts[0]
-	domain := parts[1]
-	if len(name) <= 1 {
-		return name + "***@" + domain
-	}
-	return string(name[0]) + "***@" + domain
-}
-
-// GetBidsByUserID, kullanıcının katıldığı ve teklif verdiği açık artırmaları getirir.
+// GetBidsByUserID, kullanıcının verdiği son 50 teklifi ilan özetleriyle birlikte getirir.
 func (r *ListingRepository) GetBidsByUserID(ctx context.Context, userID int64) ([]*models.UserBidDTO, error) {
 	query := `
 		SELECT
 			b.id, b.listing_id, l.brand, l.model, l.year,
-			COALESCE(p.photo_url, ''),
+			COALESCE(cp.photo_url, ''),
 			b.amount, l.current_bid, l.status, l.winner_user_id,
 			l.end_time, b.created_at
 		FROM bids b
 		JOIN listings l ON b.listing_id = l.id
-		LEFT JOIN LATERAL (
-			SELECT photo_url FROM listing_photos
-			WHERE listing_id = l.id
-			ORDER BY display_order ASC, id ASC
-			LIMIT 1
-		) p ON true
+		` + coverPhotoJoin + `
 		WHERE b.user_id = $1
 		ORDER BY b.created_at DESC
 		LIMIT 50
@@ -512,88 +391,75 @@ func (r *ListingRepository) GetBidsByUserID(ctx context.Context, userID int64) (
 			return nil, err
 		}
 		if winnerID.Valid {
-			ub.WinnerUserID = &winnerID.Int64
-			ub.IsWinner = winnerID.Int64 == userID
+			id := winnerID.Int64
+			ub.WinnerUserID = &id
+			ub.IsWinner = id == userID
 		}
-		// En yüksek lider teklif mi?
 		ub.IsLeading = ub.MyBid >= ub.CurrentBid && ub.ListingStatus == "active"
-
 		bids = append(bids, &ub)
 	}
-
 	return bids, rows.Err()
 }
 
-// CloseExpiredAuctions, süresi dolmuş aktif açık artırmaları FOR UPDATE SKIP LOCKED ile kilitler,
-// en yüksek teklifi veren kazananı belirler ve ilan durumunu 'ended' olarak kapatır.
-func (r *ListingRepository) CloseExpiredAuctions(ctx context.Context) (int, error) {
+// CloseExpiredAuctions, süresi dolan aktif ilanları kapatır ve en yüksek teklifi kazanan olarak işaretler.
+// FOR UPDATE SKIP LOCKED sayesinde birden fazla worker aynı anda güvenle çalışabilir.
+// Kapatılan ilanların ID'lerini döner.
+func (r *ListingRepository) CloseExpiredAuctions(ctx context.Context) ([]int64, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	// FOR UPDATE SKIP LOCKED ile birden fazla worker'ın aynı ilanı eşzamanlı işlemesi engellenir
-	findQuery := `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT id FROM listings
 		WHERE status = 'active' AND end_time <= NOW()
 		ORDER BY end_time ASC
-		FOR UPDATE SKIP LOCKED
 		LIMIT 100
-	`
-	rows, err := tx.QueryContext(ctx, findQuery)
+		FOR UPDATE SKIP LOCKED
+	`)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	defer rows.Close()
-
 	var expiredIDs []int64
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err == nil {
-			expiredIDs = append(expiredIDs, id)
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
 		}
+		expiredIDs = append(expiredIDs, id)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-	closedCount := 0
 	for _, id := range expiredIDs {
-		// En yüksek teklif sahibini bul
-		var winnerUserID sql.NullInt64
-		var winningBid sql.NullFloat64
-		bidErr := tx.QueryRowContext(ctx, `
-			SELECT user_id, amount FROM bids
-			WHERE listing_id = $1
-			ORDER BY amount DESC, created_at ASC
-			LIMIT 1
-		`, id).Scan(&winnerUserID, &winningBid)
-
-		var execErr error
-		if bidErr == nil && winnerUserID.Valid {
-			_, execErr = tx.ExecContext(ctx, `
-				UPDATE listings
-				SET status = 'ended', winner_user_id = $1, winning_bid = $2, updated_at = NOW()
-				WHERE id = $3
-			`, winnerUserID.Int64, winningBid.Float64, id)
-		} else {
-			_, execErr = tx.ExecContext(ctx, `
-				UPDATE listings
-				SET status = 'ended', updated_at = NOW()
-				WHERE id = $1
-			`, id)
+		_, err := tx.ExecContext(ctx, `
+			UPDATE listings l
+			SET status = 'ended',
+			    winner_user_id = top.user_id,
+			    winning_bid = top.amount,
+			    updated_at = NOW()
+			FROM (SELECT $1::BIGINT AS listing_id) target
+			LEFT JOIN LATERAL (
+				SELECT user_id, amount FROM bids
+				WHERE listing_id = target.listing_id
+				ORDER BY amount DESC, created_at ASC
+				LIMIT 1
+			) top ON true
+			WHERE l.id = target.listing_id
+		`, id)
+		if err != nil {
+			return nil, err
 		}
-
-		if execErr != nil {
-			return closedCount, execErr
-		}
-		closedCount++
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return nil, err
 	}
-
-	return closedCount, nil
+	return expiredIDs, nil
 }
 
 // ============================================================================
@@ -607,13 +473,8 @@ func (r *ListingRepository) AddPhoto(ctx context.Context, tx *sql.Tx, listingID 
 		RETURNING id, listing_id, photo_url, display_order, created_at
 	`
 	var p models.ListingPhoto
-	var row *sql.Row
-	if tx != nil {
-		row = tx.QueryRowContext(ctx, query, listingID, photoURL, order)
-	} else {
-		row = r.db.QueryRowContext(ctx, query, listingID, photoURL, order)
-	}
-	err := row.Scan(&p.ID, &p.ListingID, &p.PhotoURL, &p.DisplayOrder, &p.CreatedAt)
+	err := r.execer(tx).QueryRowContext(ctx, query, listingID, photoURL, order).
+		Scan(&p.ID, &p.ListingID, &p.PhotoURL, &p.DisplayOrder, &p.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -621,13 +482,12 @@ func (r *ListingRepository) AddPhoto(ctx context.Context, tx *sql.Tx, listingID 
 }
 
 func (r *ListingRepository) GetPhotosByListingID(ctx context.Context, listingID int64) ([]models.ListingPhoto, error) {
-	query := `
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, listing_id, photo_url, display_order, created_at
 		FROM listing_photos
 		WHERE listing_id = $1
 		ORDER BY display_order ASC, id ASC
-	`
-	rows, err := r.db.QueryContext(ctx, query, listingID)
+	`, listingID)
 	if err != nil {
 		return nil, err
 	}
@@ -644,116 +504,90 @@ func (r *ListingRepository) GetPhotosByListingID(ctx context.Context, listingID 
 	return photos, rows.Err()
 }
 
-func (r *ListingRepository) DeletePhoto(ctx context.Context, photoID int64) (*models.ListingPhoto, error) {
-	query := `DELETE FROM listing_photos WHERE id = $1 RETURNING id, listing_id, photo_url, display_order, created_at`
-	var p models.ListingPhoto
-	err := r.db.QueryRowContext(ctx, query, photoID).Scan(&p.ID, &p.ListingID, &p.PhotoURL, &p.DisplayOrder, &p.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-func (r *ListingRepository) CountPhotosByListingID(ctx context.Context, listingID int64) (int, error) {
-	var count int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM listing_photos WHERE listing_id = $1`, listingID).Scan(&count)
-	return count, err
-}
-
 // ============================================================================
-// FİLTRE VE YARDIMCI
+// FİLTRE OLUŞTURUCU
 // ============================================================================
 
-func BuildListingFilter(f models.ListingFilter) (string, []interface{}) {
+// turkishFoldFrom / turkishFoldTo, Türkçe karakterleri ASCII karşılıklarına indirger.
+// Aynı dönüşüm hem SQL tarafında (TRANSLATE) hem Go tarafında uygulanır; böylece
+// "Isuzu", "ısuzu" ve "İstanbul", "istanbul" gibi aramalar locale'den bağımsız eşleşir.
+const (
+	turkishFoldFrom = "İIıŞşĞğÜüÖöÇç"
+	turkishFoldTo   = "iiissgguuoocc"
+)
+
+var turkishFolder = strings.NewReplacer(
+	"İ", "i", "I", "i", "ı", "i", "Ş", "s", "ş", "s", "Ğ", "g", "ğ", "g",
+	"Ü", "u", "ü", "u", "Ö", "o", "ö", "o", "Ç", "c", "ç", "c",
+)
+
+// searchExpr, bir sütunu arama için normalize eden SQL ifadesini üretir.
+func searchExpr(column string) string {
+	return fmt.Sprintf("LOWER(TRANSLATE(%s, '%s', '%s'))", column, turkishFoldFrom, turkishFoldTo)
+}
+
+// BuildListingFilter, filtreden parametreli WHERE ifadesi ve argümanlarını üretir.
+func BuildListingFilter(f models.ListingFilter) (string, []any) {
 	var conditions []string
-	var args []interface{}
-	whereClause := ""
+	var args []any
 
-	if f.Status == "active" || f.Status == "" {
+	add := func(cond string, val any) {
+		args = append(args, val)
+		conditions = append(conditions, fmt.Sprintf(cond, len(args)))
+	}
+
+	switch f.Status {
+	case "", "active":
 		conditions = append(conditions, "l.status = 'active'")
-	} else if f.Status == "ended" {
+	case "ended":
 		conditions = append(conditions, "l.status = 'ended'")
 	}
 
 	if f.Brand != "" {
-		args = append(args, normalizeSearch(f.Brand))
-		conditions = append(conditions, fmt.Sprintf("LOWER(l.brand) LIKE $%d", len(args)))
+		add(searchExpr("l.brand")+` LIKE $%d ESCAPE '\'`, normalizeSearch(f.Brand))
 	}
 	if f.Model != "" {
-		args = append(args, normalizeSearch(f.Model))
-		conditions = append(conditions, fmt.Sprintf("LOWER(l.model) LIKE $%d", len(args)))
+		add(searchExpr("l.model")+` LIKE $%d ESCAPE '\'`, normalizeSearch(f.Model))
 	}
 	if f.YearMin > 0 {
-		args = append(args, f.YearMin)
-		conditions = append(conditions, fmt.Sprintf("l.year >= $%d", len(args)))
+		add("l.year >= $%d", f.YearMin)
 	}
 	if f.YearMax > 0 {
-		args = append(args, f.YearMax)
-		conditions = append(conditions, fmt.Sprintf("l.year <= $%d", len(args)))
+		add("l.year <= $%d", f.YearMax)
 	}
 	if f.City != "" {
-		args = append(args, normalizeSearch(f.City))
-		conditions = append(conditions, fmt.Sprintf("LOWER(l.city) LIKE $%d", len(args)))
+		add(searchExpr("l.city")+` LIKE $%d ESCAPE '\'`, normalizeSearch(f.City))
 	}
 	if f.FuelType != "" {
-		args = append(args, f.FuelType)
-		conditions = append(conditions, fmt.Sprintf("l.fuel_type = $%d", len(args)))
+		add("l.fuel_type = $%d", f.FuelType)
 	}
 	if f.DamageStatus != "" {
-		args = append(args, string(f.DamageStatus))
-		conditions = append(conditions, fmt.Sprintf("l.damage_status = $%d", len(args)))
+		add("l.damage_status = $%d", string(f.DamageStatus))
 	}
 	if f.Transmission != "" {
-		args = append(args, f.Transmission)
-		conditions = append(conditions, fmt.Sprintf("l.transmission = $%d", len(args)))
+		add("l.transmission = $%d", f.Transmission)
 	}
 	if f.PriceMin > 0 {
-		args = append(args, f.PriceMin)
-		conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(l.current_bid, 0), l.starting_price) >= $%d", len(args)))
+		add("COALESCE(NULLIF(l.current_bid, 0), l.starting_price) >= $%d", f.PriceMin)
 	}
 	if f.PriceMax > 0 {
-		args = append(args, f.PriceMax)
-		conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(l.current_bid, 0), l.starting_price) <= $%d", len(args)))
+		add("COALESCE(NULLIF(l.current_bid, 0), l.starting_price) <= $%d", f.PriceMax)
 	}
 	if f.MaxMileage > 0 {
-		args = append(args, f.MaxMileage)
-		conditions = append(conditions, fmt.Sprintf("l.mileage <= $%d", len(args)))
+		add("l.mileage <= $%d", f.MaxMileage)
 	}
 
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	if len(conditions) == 0 {
+		return "", args
 	}
-	return whereClause, args
+	return "WHERE " + strings.Join(conditions, " AND "), args
 }
 
+// likeEscaper, LIKE desenindeki özel karakterleri (%, _, \) kaçışlar.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// normalizeSearch, arama metnini SQL tarafındaki searchExpr ile aynı biçime getirir.
 func normalizeSearch(s string) string {
-	cleaned := strings.TrimSpace(s)
-	replacer := strings.NewReplacer("İ", "i", "I", "ı", "Ş", "ş", "Ğ", "ğ", "Ü", "ü", "Ö", "ö", "Ç", "ç")
-	cleaned = replacer.Replace(cleaned)
-	cleaned = strings.ToLower(cleaned)
-	return "%" + cleaned + "%"
-}
-
-func scanListing(row *sql.Row) (*models.Listing, error) {
-	var l models.Listing
-	var dmg string
-	err := row.Scan(
-		&l.ID, &l.UserID, &l.Brand, &l.Model, &l.Year, &l.Mileage,
-		&l.FuelType, &l.Transmission, &l.City, &l.Description,
-		&dmg, &l.Status, &l.EngineVolume, &l.EstimatedPrice,
-		&l.StartingPrice, &l.MinIncrement, &l.EndTime, &l.CurrentBid,
-		&l.WinnerUserID, &l.WinningBid,
-		&l.CreatedAt, &l.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrListingNotFound
-		}
-		return nil, err
-	}
-	l.DamageStatus = models.DamageStatus(dmg)
-	if l.CreatedAt.IsZero() {
-		l.CreatedAt = time.Now()
-	}
-	return &l, nil
+	cleaned := strings.ToLower(turkishFolder.Replace(strings.TrimSpace(s)))
+	return "%" + likeEscaper.Replace(cleaned) + "%"
 }

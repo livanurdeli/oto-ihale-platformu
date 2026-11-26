@@ -33,7 +33,7 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			},
 			expectedWhereSub: []string{
 				"WHERE l.status = 'active'",
-				"LOWER(l.brand) LIKE $1",
+				"LOWER(TRANSLATE(l.brand", "LIKE $1",
 			},
 			expectedArgs: []interface{}{"%bmw%"},
 		},
@@ -45,8 +45,8 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			},
 			expectedWhereSub: []string{
 				"WHERE l.status = 'active'",
-				"LOWER(l.brand) LIKE $1",
-				"LOWER(l.model) LIKE $2",
+				"LOWER(TRANSLATE(l.brand", "LIKE $1",
+				"LOWER(TRANSLATE(l.model", "LIKE $2",
 			},
 			expectedArgs: []interface{}{"%ford%", "%focus%"},
 		},
@@ -70,7 +70,7 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			},
 			expectedWhereSub: []string{
 				"WHERE l.status = 'active'",
-				"LOWER(l.city) LIKE $1",
+				"LOWER(TRANSLATE(l.city", "LIKE $1",
 			},
 			expectedArgs: []interface{}{"%ankara%"},
 		},
@@ -142,11 +142,11 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			},
 			expectedWhereSub: []string{
 				"l.status = 'active'",
-				"LOWER(l.brand) LIKE $1",
-				"LOWER(l.model) LIKE $2",
+				"LOWER(TRANSLATE(l.brand", "LIKE $1",
+				"LOWER(TRANSLATE(l.model", "LIKE $2",
 				"l.year >= $3",
 				"l.year <= $4",
-				"LOWER(l.city) LIKE $5",
+				"LOWER(TRANSLATE(l.city", "LIKE $5",
 				"l.fuel_type = $6",
 				"l.damage_status = $7",
 				"l.mileage <= $8",
@@ -163,12 +163,32 @@ func TestBuildListingFilter_TableDriven(t *testing.T) {
 			},
 		},
 		{
+			name: "Türkçe büyük I içeren marka (Isuzu) locale'den bağımsız aranmalı",
+			filter: models.ListingFilter{
+				Brand: "ISUZU",
+			},
+			expectedWhereSub: []string{
+				"LOWER(TRANSLATE(l.brand", "LIKE $1",
+			},
+			expectedArgs: []interface{}{"%isuzu%"},
+		},
+		{
+			name: "LIKE joker karakterleri kaçışlanmalı",
+			filter: models.ListingFilter{
+				Model: "100%_a",
+			},
+			expectedWhereSub: []string{
+				"LIKE $1 ESCAPE",
+			},
+			expectedArgs: []interface{}{`%100\%\_a%`},
+		},
+		{
 			name: "SQL Injection parametrelere aktarılmalı, sorgu metnine yapıştırılmamalı",
 			filter: models.ListingFilter{
 				Brand: "'; DROP TABLE listings; --",
 			},
 			expectedWhereSub: []string{
-				"LOWER(l.brand) LIKE $1",
+				"LOWER(TRANSLATE(l.brand", "LIKE $1",
 			},
 			expectedArgs: []interface{}{
 				"%'; drop table listings; --%",

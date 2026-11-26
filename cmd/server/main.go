@@ -1,18 +1,8 @@
+// Web & API sunucusu (mikroservis 1).
+// HTML sayfaları, REST API ve WebSocket canlı yayınını sunar. Açık artırmaları
+// kapatma işi ayrı çalışan auction-worker servisindedir; worker'ın ürettiği
+// olaylar PostgreSQL LISTEN/NOTIFY üzerinden alınıp WebSocket istemcilerine iletilir.
 package main
-
-// ============================================================================
-// ADIM 9: UYGULAMANIN ANA GİRİŞ NOKTASI (ENTRYPOINT) & ORKESTRASYON
-// ============================================================================
-// HAFTA 4 DEĞİŞİKLİKLERİ:
-// 1. JWT Kaldırıldı -> Session Middleware (PostgreSQL tabanlı stateful auth)
-// 2. Role ve Admin Kaldırıldı: Tüm kullanıcılar standart üyedir.
-// 3. Açık Artırma Arka Plan Çalışanı (AuctionWorker) eklendi:
-//    Her 10 saniyede bir süresi dolan artırmaları kontrol edip kazananı belirler.
-// 4. Yeni Rotalar:
-//    POST /listings/{id}/bid    -> Teklif ver
-//    GET  /api/listings/{id}/bids -> Teklif geçmişi (JSON API)
-// 5. Config'den JWT_SECRET kaldırıldı; artık .env'de JWT_SECRET gerekmez.
-// ============================================================================
 
 import (
 	"context"
@@ -29,13 +19,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"car-auction-platform/internal/auth"
 	"car-auction-platform/internal/config"
 	"car-auction-platform/internal/controllers"
 	"car-auction-platform/internal/db"
+	"car-auction-platform/internal/events"
 	"car-auction-platform/internal/middlewares"
 	"car-auction-platform/internal/repository"
 	"car-auction-platform/internal/services"
+	"car-auction-platform/internal/ws"
 )
 
 func main() {
@@ -48,191 +39,164 @@ func main() {
 func run() error {
 	log.Println("🚀 Araç Açık Artırma & Değerleme Platformu Sunucusu Başlatılıyor...")
 
-	// 1. Ayarları oku (.env ve ortam değişkenleri)
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("konfigürasyon yüklenemedi: %w", err)
 	}
-	log.Printf("⚙️  Ortam: %s | Port: %s | Veritabanı: %s:%s/%s",
-		cfg.ServerEnv, cfg.ServerPort, cfg.DBHost, cfg.DBPort, cfg.DBName)
+	log.Printf("⚙️  Ortam: %s | Port: %s", cfg.ServerEnv, cfg.ServerPort)
 
-	// 2. Veritabanına bağlan
 	database, err := db.Connect(cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("veritabanı bağlantı hatası: %w", err)
 	}
 	defer func() {
-		log.Println("🔌 Veritabanı bağlantısı kapatılıyor...")
 		if closeErr := database.Close(); closeErr != nil {
 			log.Printf("⚠️  Veritabanı kapatılırken hata: %v", closeErr)
 		}
 	}()
-	log.Println("✅ Veritabanı bağlantısı başarıyla kuruldu.")
+	log.Println("✅ Veritabanı bağlantısı kuruldu.")
 
-	// 3. Migration'ları çalıştır (001, 002, 003, 004 otomatik uygulanır)
+	// Şema migration'larını yalnızca web sunucusu uygular (worker şemanın hazır olmasını bekler)
 	if err := db.RunMigrations(database.DB, ""); err != nil {
 		return fmt.Errorf("migration çalıştırma hatası: %w", err)
 	}
 
-	// 4. MVC Mimari Katmanlarını Başlat
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Kullanıcı Repository
-	userRepo := repository.NewUserRepository(database.DB)
-
-	// Session Repository (JWT yerine stateful session)
-	sessionRepo := repository.NewSessionRepository(database.DB)
-
-	// Development ortamında demo ve yönetici (admin) hesapları oluştur
-	if cfg.ServerEnv == "development" {
-		demoHash, _ := auth.HashPassword("Demo123!")
-		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "Demo Kullanıcı", "demo@aracihale.com", demoHash, "user")
-		adminHash, _ := auth.HashPassword("Admin123!")
-		_ = userRepo.CreateInitialUserIfNotExists(context.Background(), "Yönetici", "admin@aracihale.com", adminHash, "admin")
-		log.Println("✅ [Development] Demo (demo@aracihale.com) ve Admin (admin@aracihale.com / Admin123!) hesapları kontrol edildi.")
+	// --- Bağımlılıkların kurulumu (Composition Root) ---
+	uploadsDir, err := filepath.Abs("uploads")
+	if err != nil {
+		return err
+	}
+	photoStorage, err := services.NewLocalPhotoStorage(uploadsDir)
+	if err != nil {
+		return err
 	}
 
-	// Auth Service: JWT yerine Session tabanlı
-	authService := services.NewAuthService(userRepo, sessionRepo)
+	userRepo := repository.NewUserRepository(database.DB)
+	sessionRepo := repository.NewSessionRepository(database.DB)
+	listingRepo := repository.NewListingRepository(database.DB)
 
-	// Auth Controller
-	authController, err := controllers.NewAuthController(authService)
+	authService := services.NewAuthService(userRepo, sessionRepo)
+	userService := services.NewUserService(userRepo)
+	listingService := services.NewListingService(listingRepo, photoStorage, events.NewPGPublisher(database.DB))
+
+	hub := ws.NewHub()
+	go hub.Run(ctx)
+	// Diğer servislerden (ve diğer sunucu kopyalarından) gelen olayları WebSocket odalarına ilet
+	go events.Listen(ctx, cfg.DatabaseURL, func(e events.Event) {
+		hub.Broadcast(e.ListingID, e)
+	})
+
+	authController, err := controllers.NewAuthController(authService, cfg.IsProduction())
 	if err != nil {
 		return fmt.Errorf("AuthController başlatılamadı: %w", err)
 	}
-
-	// Uploads dizini
-	uploadsDir, _ := filepath.Abs("uploads")
-	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
-		return fmt.Errorf("uploads klasörü oluşturulamadı: %w", err)
+	userController, err := controllers.NewUserController(userService)
+	if err != nil {
+		return fmt.Errorf("UserController başlatılamadı: %w", err)
 	}
-
-	// Listing katmanı
-	listingRepo := repository.NewListingRepository(database.DB)
-	listingService := services.NewListingService(listingRepo)
-	listingController, err := controllers.NewListingController(listingService, uploadsDir)
+	listingController, err := controllers.NewListingController(listingService, hub)
 	if err != nil {
 		return fmt.Errorf("ListingController başlatılamadı: %w", err)
 	}
 
-	// Admin Controller
-	adminController, err := controllers.NewAdminController(authService, listingService)
-	if err != nil {
-		return fmt.Errorf("AdminController başlatılamadı: %w", err)
-	}
-
-	// Süresi dolan oturumları periyodik temizleme görevi (Her 1 saatte bir)
-	ctxSessionClean, cancelSessionClean := context.WithCancel(context.Background())
-	defer cancelSessionClean()
+	// Süresi dolan oturumları saatte bir temizle
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctxSessionClean.Done():
+			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = sessionRepo.DeleteExpiredSessions(context.Background())
+				if err := sessionRepo.DeleteExpiredSessions(ctx); err != nil && ctx.Err() == nil {
+					log.Printf("⚠️  Süresi dolmuş oturumlar temizlenemedi: %v", err)
+				}
 			}
 		}
 	}()
 
-	// 5. HTTP Router ve Middleware Zinciri
+	// --- HTTP yönlendirici ---
 	r := chi.NewRouter()
-
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// Not: middleware.RealIP kullanılmaz; X-Forwarded-For başlığı istemci tarafından sahte
+	// gönderilebilir ve IP bazlı giriş sınırlaması atlatılabilirdi. Güvenilir bir ters vekil
+	// (reverse proxy) arkasında çalıştırılırsa IP o katmanda belirlenmelidir.
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
-
-	// Session Middleware: JWT'nin yerini aldı.
-	// Her istekte 'session_token' çerezinden veya Authorization header'dan
-	// token okunur ve PostgreSQL'den doğrulanır.
+	r.Use(securityHeaders)
 	r.Use(middlewares.SessionMiddleware(authService))
 
-	// Statik Dosyalar (/static/*)
 	staticDir := filepath.Join(controllers.FindViewsDir(), "..", "static")
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
-
-	// Yüklenen Fotoğraflar (/uploads/*)
 	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))))
 
-	// ----------------------------------------------------------------
-	// SAYFALAR (HTML Views)
-	// ----------------------------------------------------------------
-	r.Get("/", listingController.ListingsPage)
-	r.Get("/login", authController.LoginPage)
-	r.Post("/login", authController.LoginPost)
-	r.Get("/register", authController.RegisterPage)
-	r.Post("/register", authController.RegisterPost)
-	r.Post("/logout", authController.Logout)
-	r.Get("/403", authController.Forbidden)
+	// WebSocket uzun ömürlü bir bağlantıdır; zaman aşımı ara katmanının dışında tutulur
+	r.Get("/ws/listings/{id:[0-9]+}", listingController.HandleWebSocket)
 
-	// İlan Sayfaları (Herkese Açık)
-	r.Get("/listings", listingController.ListingsPage)
-	r.Get("/listings/{id:[0-9]+}", listingController.ListingDetailPage)
-	r.Get("/listings/{id:[0-9]+}/live", listingController.APIGetLiveListing)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(30 * time.Second))
 
-	// Korumalı Kullanıcı Sayfaları (Oturum Zorunlu)
-	r.Group(func(protected chi.Router) {
-		protected.Use(middlewares.RequireAuth)
-		protected.Get("/dashboard", authController.Dashboard)
+		// HTML sayfaları (flash mesajları yalnızca sayfa isteklerinde okunur)
+		r.Group(func(pages chi.Router) {
+			pages.Use(middlewares.Flash)
 
-		// İlan Yönetimi
-		protected.Get("/listings/new", listingController.NewListingPage)
-		protected.Post("/listings", listingController.CreateListingPost)
-		protected.Get("/my/listings", listingController.MyListingsPage)
-		protected.Get("/my/bids", listingController.MyBidsPage)
-		protected.Get("/listings/{id:[0-9]+}/edit", listingController.EditListingPage)
-		protected.Post("/listings/{id:[0-9]+}/edit", listingController.EditListingPost)
-		protected.Post("/listings/{id:[0-9]+}/delete", listingController.DeleteListingPost)
+			pages.Get("/", listingController.ListingsPage)
+			pages.Get("/login", authController.LoginPage)
+			pages.Post("/login", authController.LoginPost)
+			pages.Get("/register", authController.RegisterPage)
+			pages.Post("/register", authController.RegisterPost)
+			pages.Post("/logout", authController.Logout)
 
-		// Hafta 4: Açık Artırma - Teklif Ver
-		protected.Post("/listings/{id:[0-9]+}/bid", listingController.PlaceBidPost)
-	})
+			pages.Get("/listings", listingController.ListingsPage)
+			pages.Get("/listings/{id:[0-9]+}", listingController.ListingDetailPage)
 
-	// Yönetici Paneli (Yalnızca Admin)
-	r.Group(func(admin chi.Router) {
-		admin.Use(middlewares.RequireAdmin)
-		admin.Get("/admin/dashboard", adminController.AdminDashboard)
-		admin.Post("/admin/users/{id:[0-9]+}/toggle-block", adminController.ToggleBlockUser)
-	})
+			pages.Group(func(protected chi.Router) {
+				protected.Use(middlewares.RequireAuth)
+				protected.Get("/dashboard", userController.Dashboard)
+				protected.Post("/profile/update", userController.UpdateProfilePost)
+				protected.Post("/profile/password", userController.UpdatePasswordPost)
+				protected.Post("/users/{id:[0-9]+}/report-fraud", userController.ReportFraudPost)
 
-	// ----------------------------------------------------------------
-	// REST API (/api/...)
-	// ----------------------------------------------------------------
-	r.Route("/api/auth", func(api chi.Router) {
-		api.Post("/register", authController.APIRegister)
-		api.Post("/login", authController.APILogin)
-		api.Post("/logout", authController.Logout)
-
-		api.Group(func(authed chi.Router) {
-			authed.Use(middlewares.RequireAuth)
-			authed.Get("/me", authController.APIMe)
+				protected.Get("/listings/new", listingController.NewListingPage)
+				protected.Post("/listings", listingController.CreateListingPost)
+				protected.Get("/my/listings", listingController.MyListingsPage)
+				protected.Get("/my/bids", listingController.MyBidsPage)
+				protected.Get("/listings/{id:[0-9]+}/edit", listingController.EditListingPage)
+				protected.Post("/listings/{id:[0-9]+}/edit", listingController.EditListingPost)
+				protected.Post("/listings/{id:[0-9]+}/delete", listingController.DeleteListingPost)
+				protected.Post("/listings/{id:[0-9]+}/bid", listingController.PlaceBidPost)
+			})
 		})
-	})
 
-	// Açık Artırma Teklif & Piyasa Değerleme API'si
-	r.Route("/api/listings", func(api chi.Router) {
-		api.Get("/{id:[0-9]+}/bids", listingController.APIGetBids)
-		api.Get("/{id:[0-9]+}/live", listingController.APIGetLiveListing)
-		api.HandleFunc("/estimate-price", listingController.APIEstimatePrice)
-
-		api.Group(func(authed chi.Router) {
-			authed.Use(middlewares.RequireAuth)
-			authed.Post("/{id:[0-9]+}/bid", listingController.PlaceBidPost)
+		// REST API
+		r.Route("/api/auth", func(api chi.Router) {
+			api.Post("/register", authController.APIRegister)
+			api.Post("/login", authController.APILogin)
+			api.Post("/logout", authController.Logout)
+			api.With(middlewares.RequireAuth).Get("/me", authController.APIMe)
 		})
+
+		r.Route("/api/listings", func(api chi.Router) {
+			api.Get("/{id:[0-9]+}/bids", listingController.APIGetBids)
+			api.Get("/{id:[0-9]+}/live", listingController.APIGetLiveListing)
+			api.Get("/estimate-price", listingController.APIEstimatePrice)
+			api.Post("/estimate-price", listingController.APIEstimatePrice)
+			api.With(middlewares.RequireAuth).Post("/{id:[0-9]+}/bid", listingController.PlaceBidPost)
+		})
+
+		r.Get("/healthz", controllers.HealthCheckController(database.DB))
 	})
 
-	r.Get("/healthz", controllers.HealthCheckController(database.DB))
-
-	// 6. HTTP Sunucusu Hazırla
 	server := &http.Server{
-		Addr:         ":" + cfg.ServerPort,
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 45 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              ":" + cfg.ServerPort,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second, // Büyük fotoğraf yüklemeleri için
+		WriteTimeout:      45 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	serverErrors := make(chan error, 1)
@@ -243,30 +207,31 @@ func run() error {
 		}
 	}()
 
-	// 7. Graceful Shutdown
-	shutdownChan := make(chan os.Signal, 1)
-	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
-
 	select {
 	case err := <-serverErrors:
 		return fmt.Errorf("sunucu hatası: %w", err)
-
-	case sig := <-shutdownChan:
-		log.Printf("🛑 Kapanma sinyali alındı (%v). Sunucu güvenli biçimde durduruluyor...", sig)
-
-		// Oturum temizleme görevini durdur
-		cancelSessionClean()
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("⚠️  Sunucu zorla kapatılıyor: %v", err)
-			_ = server.Close()
-		}
-
-		log.Println("👋 Sunucu düzgün biçimde sonlandırıldı.")
+	case <-ctx.Done():
+		log.Println("🛑 Kapanma sinyali alındı. Sunucu güvenli biçimde durduruluyor...")
 	}
 
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("⚠️  Sunucu zorla kapatılıyor: %v", err)
+		_ = server.Close()
+	}
+	log.Println("👋 Sunucu düzgün biçimde sonlandırıldı.")
 	return nil
+}
+
+// securityHeaders, temel güvenlik başlıklarını ekler.
+// nosniff: tarayıcının yüklenen dosyaların türünü tahmin edip HTML olarak çalıştırmasını engeller.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }

@@ -1,11 +1,11 @@
 // ============================================================================
-// DOSYA AMACI: AÇIK ARTIRMA ARKA PLAN SERVİSİ
+// AÇIK ARTIRMA ARKA PLAN SERVİSİ (AUCTION WORKER)
 // ============================================================================
-// Bu dosya, süresi dolan açık artırmaların arka planda düzenli aralıklarla
-// otomatik olarak kontrol edilmesini ve kapatılmasını sağlayan arka plan
-// çalışanını (worker) içerir.
-// Belirlenen periyotlarda veritabanını tarayarak bitiş süresi gelmiş ilanların
-// kazananlarını belirler, ilan durumlarını günceller ve açık artırma sürecini sonlandırır.
+// Süresi dolan açık artırmaları belirli aralıklarla kapatır ve kazananları
+// belirler. Bağımsız bir mikroservis olarak (cmd/auction-worker) çalışır;
+// kapanan ihaleleri olay yolu (events) üzerinden web sunucusuna bildirir.
+// Worker yalnızca AuctionCloser arayüzüne, kapatma servisi de yalnızca
+// depo katmanının tek bir metoduna bağımlıdır (Arayüz Ayrımı İlkesi / ISP).
 // ============================================================================
 
 package services
@@ -14,76 +14,85 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"car-auction-platform/internal/events"
 )
 
-// ============================================================================
-// HAFTA 4: AÇIK ARTIRMA ARKA PLAN ÇALIŞANI (AUCTION BACKGROUND WORKER)
-// ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. Görevi: Süresi bitmiş (bitiş zamanı şimdiki zamandan önce olan) ve hala aktif olan ilanları tespit eder.
-// 2. Kazananı Belirleme:
-//    - En yüksek teklifi veren kullanıcıyı kazanan ('winner_user_id'), tutarını kazanan teklif ('winning_bid')
-//      olarak işaretler ve ilanın durumunu 'ended' (sonlandı) yapar.
-//    - Teklif verilmemişse kazanan olmadan ilanı 'ended' (sonlandı) durumuna çeker.
-// 3. Mikroservis Uyumluluğu:
-//    Bu arka plan çalışanı (worker), bağımsız bir mikroservis ('cmd/auction-worker') olarak ayrı bir
-//    kapsayıcıda (container) veya süreçte (process) çalışabilir ya da ana sunucuyla birlikte başlatılabilir.
-// ============================================================================
-
-// AuctionWorker, süresi biten açık artırmaları periyodik olarak kontrol eden arka plan çalışanını temsil eder.
-type AuctionWorker struct {
-	listingService ListingServiceInterface // İlan ve açık artırma iş mantığı işlemlerini yürüten servis arayüzü
-	interval       time.Duration           // Kontrol döngüsünün hangi sıklıkla çalışacağını belirleyen zaman aralığı
-	stopChan       chan struct{}           // Arka plan görevini güvenli bir şekilde durdurmak için kullanılan sinyal kanalı
+// AuctionCloser, süresi dolan ihaleleri kapatma yeteneğidir.
+type AuctionCloser interface {
+	CloseExpiredAuctions(ctx context.Context) (int, error)
 }
 
-// NewAuctionWorker, yeni bir açık artırma arka plan çalışanı örneği oluşturur ve varsayılan ayarları yapar.
-func NewAuctionWorker(listingService ListingServiceInterface, interval time.Duration) *AuctionWorker {
-	if interval <= 0 {
-		interval = 5 * time.Second // Geçersiz veya sıfır aralık verilmişse varsayılan olarak 5 saniye ayarlanır.
+// expiredAuctionStore, kapatma servisinin depo katmanından ihtiyaç duyduğu tek işlemdir.
+type expiredAuctionStore interface {
+	CloseExpiredAuctions(ctx context.Context) ([]int64, error)
+}
+
+// AuctionCloserService, süresi dolan ihaleleri kapatır ve her biri için "ihale bitti" olayı yayınlar.
+type AuctionCloserService struct {
+	store     expiredAuctionStore
+	publisher events.Publisher
+}
+
+func NewAuctionCloserService(store expiredAuctionStore, publisher events.Publisher) *AuctionCloserService {
+	if publisher == nil {
+		publisher = events.NopPublisher{}
 	}
-	return &AuctionWorker{
-		listingService: listingService,
-		interval:       interval,
-		stopChan:       make(chan struct{}), // Durdurma sinyali iletmek için boş veri taşıyan bir kanal oluşturulur.
-	}
+	return &AuctionCloserService{store: store, publisher: publisher}
 }
 
-// Start, açık artırma kontrol döngüsünü arka planda eşzamanlı bir hafif iş parçacığı (goroutine) olarak başlatır.
-func (w *AuctionWorker) Start(ctx context.Context) {
-	log.Printf("⏱️  Açık Artırma Arka Plan Görevi (Auction Worker) başlatıldı (Kontrol aralığı: %v)", w.interval)
-
-	ticker := time.NewTicker(w.interval) // Belirtilen aralıklarla düzenli tetikleme yapan zamanlayıcı oluşturulur.
-	go func() {                          // Ana akışı engellememek için döngüyü arka planda eşzamanlı (goroutine) başlatır.
-		defer ticker.Stop() // Görev sonlandığında zamanlayıcıyı kapatıp bellek sızıntısını önler.
-		for {
-			select { // Kanallardan gelen sinyalleri dinleyen çoklu seçim yapısı
-			case <-ctx.Done(): // Uygulama genelinden iptal veya kapanma sinyali gelirse çalışmayı sonlandırır.
-				log.Println("🛑 Açık artırma arka plan görevi durduruldu.")
-				return
-			case <-w.stopChan: // Stop() metodu çağrılarak durdurma sinyali iletilmişse çalışmayı sonlandırır.
-				log.Println("🛑 Açık artırma arka plan görevi sinyalle sonlandırıldı.")
-				return
-			case <-ticker.C: // Zamanlayıcının süresi her dolduğunda (örneğin 5 saniyede bir) tetiklenir.
-				w.processExpiredAuctions(ctx) // Süresi dolan ilanları tespit edip kapatma işlemini yürütür.
-			}
-		}
-	}()
-}
-
-// Stop, arka planda çalışan kontrol döngüsüne sinyal göndererek güvenli bir şekilde durdurulmasını sağlar.
-func (w *AuctionWorker) Stop() {
-	close(w.stopChan) // Kanalı kapatarak dinleyen arka plan döngüsüne sonlandırma sinyali iletir.
-}
-
-// processExpiredAuctions, süresi dolmuş açık artırmaları veritabanında kapatır ve kazananları belirler.
-func (w *AuctionWorker) processExpiredAuctions(ctx context.Context) {
-	closedCount, err := w.listingService.CloseExpiredAuctions(ctx) // Süresi biten ilanları veritabanında sonlandırır ve sayısını döner.
+func (s *AuctionCloserService) CloseExpiredAuctions(ctx context.Context) (int, error) {
+	ids, err := s.store.CloseExpiredAuctions(ctx)
 	if err != nil {
-		log.Printf("⚠️  Açık artırma sonlandırma hatası: %v", err)
+		return 0, err
+	}
+	for _, id := range ids {
+		if err := s.publisher.Publish(ctx, events.Event{Type: events.TypeAuctionEnded, ListingID: id}); err != nil {
+			log.Printf("⚠️  İhale bitti olayı yayınlanamadı (ilan %d): %v", id, err)
+		}
+	}
+	return len(ids), nil
+}
+
+type AuctionWorker struct {
+	closer   AuctionCloser
+	interval time.Duration
+}
+
+func NewAuctionWorker(closer AuctionCloser, interval time.Duration) *AuctionWorker {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	return &AuctionWorker{closer: closer, interval: interval}
+}
+
+// Run, ctx iptal edilene kadar kontrol döngüsünü çalıştırır (çağıranı bloklar).
+func (w *AuctionWorker) Run(ctx context.Context) {
+	log.Printf("⏱️  Açık artırma worker'ı başladı (kontrol aralığı: %v)", w.interval)
+
+	ticker := time.NewTicker(w.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("🛑 Açık artırma worker'ı durduruldu.")
+			return
+		case <-ticker.C:
+			w.processExpiredAuctions(ctx)
+		}
+	}
+}
+
+func (w *AuctionWorker) processExpiredAuctions(ctx context.Context) {
+	closedCount, err := w.closer.CloseExpiredAuctions(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("⚠️  Açık artırma sonlandırma hatası: %v", err)
+		}
 		return
 	}
-	if closedCount > 0 { // Kapatılan en az bir ilan varsa log kaydı oluşturur.
-		log.Printf("🏁 %d adet süresi dolan açık artırma başarıyla tamamlandı ve kazananları belirlendi.", closedCount)
+	if closedCount > 0 {
+		log.Printf("🏁 %d adet süresi dolan açık artırma tamamlandı ve kazananları belirlendi.", closedCount)
 	}
 }

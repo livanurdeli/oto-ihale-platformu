@@ -31,7 +31,7 @@ Bu hafta tamamlanan temel isterler ve geliştirmeler:
    - Hata durumunda yarım kayıt kalmaması için DB transaction ve disk rollback mekanizması uygulandı.
 6. **Birim Testleri:**
    - Geçerli ve geçersiz ilan doğrulama testleri.
-   - Yetki testleri (İlan sahibi düzenleyebilir/silebilir, yabancı kullanıcı 403 alır, admin düzenleyebilir/silebilir).
+   - Yetki testleri (İlan sahibi düzenleyebilir/silebilir, yabancı kullanıcı 403 alır). Platformda yönetici (admin) rolü yoktur; tüm hesaplar standart kullanıcıdır.
    - Fotoğraf MIME ve boyut sınır testleri.
    - Filtre sorgu kurucusu tablo testleri (WHERE cümleleri ve SQL Injection koruması).
 
@@ -41,17 +41,20 @@ Bu hafta tamamlanan temel isterler ve geliştirmeler:
 
 ```
 ├── cmd/
-│   ├── server/main.go       # Web sunucusu & HTTP yönlendirici
-│   └── seed/main.go         # 11.000+ araç CSV veri tohumlama aracı
+│   ├── server/main.go         # Mikroservis 1: Web sunucusu, REST API, WebSocket
+│   ├── auction-worker/main.go # Mikroservis 2: Süresi dolan ihaleleri kapatan motor
+│   └── seed/main.go           # 11.000+ araç CSV veri tohumlama aracı
 ├── internal/
 │   ├── config/              # .env konfigürasyon yönetimi
 │   ├── db/                  # PostgreSQL bağlantısı ve migration motoru
 │   ├── models/              # User, Listing, ListingPhoto, ListingFilter modelleri
 │   ├── repository/          # PostgreSQL veri erişim katmanı
-│   ├── services/            # İş kuralları, şifreleme, JWT, fotoğraf doğrulama
+│   ├── services/            # İş kuralları (auth, kullanıcı, ilan, ihale kapatma, değerleme, NLP), fotoğraf deposu
+│   ├── events/              # Servisler arası olay yolu (PostgreSQL LISTEN/NOTIFY)
+│   ├── ws/                  # WebSocket canlı ihale odaları
 │   ├── controllers/         # HTTP controller'lar & View renderer
-│   └── middlewares/         # JWT Auth, RequireAuth, RequireAdmin
-├── migrations/              # 001_initial, 002_sessions, 003_listing_constraints
+│   └── middlewares/         # Oturum (session), RequireAuth, flash mesajları
+├── migrations/              # Sıralı SQL şema migration'ları (001 - 008)
 ├── web/
 │   ├── static/              # CSS ve stil dosyaları
 │   └── views/               # HTML şablonları (layout, listings, detail, form vb.)
@@ -63,7 +66,7 @@ Bu hafta tamamlanan temel isterler ve geliştirmeler:
 ## 🚀 Kurulum ve Çalıştırma
 
 ### 1. Gereksinimler
-- Go 1.22+
+- Go 1.26+
 - PostgreSQL 14+
 
 ### 2. Ortam Değişkenleri (`.env`)
@@ -84,14 +87,23 @@ DB_SSLMODE=disable
 # Bağımlılıkları kontrol et
 go mod tidy
 
-# Sunucuyu çalıştır (Otomatik migration'lar 001 - 005 uygulanır)
-go run cmd/server/main.go
+# Web sunucusu + açık artırma worker'ını birlikte çalıştır
+# (migration'lar web sunucusu açılırken otomatik uygulanır)
+make run
 ```
 Uygulama `http://localhost:8080` adresinde çalışacaktır.
 
-Açık artırma arka plan motorunu (worker) başlatmak için:
+Servisleri ayrı ayrı çalıştırmak için:
 ```bash
-go run cmd/auction-worker/main.go
+make server   # yalnızca web sunucusu
+make worker   # yalnızca açık artırma motoru
+```
+> Worker çalışmazsa süresi dolan ihaleler kapanmaz ve kazanan belirlenmez.
+> İki servis PostgreSQL LISTEN/NOTIFY ile haberleşir; ihale bittiğinde tarayıcılar WebSocket ile anında bilgilendirilir.
+
+Gerçek PostgreSQL üzerinde entegrasyon testi (BOŞ bir test veritabanı kullanın):
+```bash
+TEST_DATABASE_URL=postgres://... go test -tags integration ./internal/repository/
 ```
 
 ### 4. Test İlan Verilerini Yükleme (Seed)
@@ -135,8 +147,8 @@ go test -v ./internal/repository -run TestBuildListingFilter
 | `GET` | `/listings/new` | Giriş Gerekli | Yeni ilan formu |
 | `POST` | `/listings` | Giriş Gerekli | Yeni ilan oluşturma ve fotoğraf yükleme |
 | `GET` | `/my/listings` | Giriş Gerekli | Kullanıcının kendi ilanlarım sayfası |
-| `GET` | `/listings/{id}/edit` | Sahibi veya Admin | İlan düzenleme sayfası |
-| `POST` | `/listings/{id}/edit` | Sahibi veya Admin | İlan güncelleme |
-| `POST` | `/listings/{id}/delete` | Sahibi veya Admin | İlanı ve diskteki fotoğraflarını silme |
+| `GET` | `/listings/{id}/edit` | İlan Sahibi | İlan düzenleme sayfası |
+| `POST` | `/listings/{id}/edit` | İlan Sahibi | İlan güncelleme (teklif almış ilanda fiyat koşulları değişmez) |
+| `POST` | `/listings/{id}/delete` | İlan Sahibi | Teklif almamış ilanı ve fotoğraflarını silme |
 | `GET` | `/uploads/*` | Herkes | Yüklenen araç fotoğraflarının statik sunumu |
 

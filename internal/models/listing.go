@@ -1,42 +1,25 @@
-// Bu dosya, araç açık artırma sistemine ait temel veri yapılarını (modelleri / domain entities),
-// veri aktarım nesnelerini (DTO - Data Transfer Object) ve filtreleme yapılarını tanımlar.
-// İlanlar (Listing), fotoğraflar (ListingPhoto), teklifler (Bid) ve hasar durumları gibi
-// veritabanındaki tabloların Go programlama dilindeki nesne karşılıkları burada yer alır.
-// Ayrıca açık artırma kurallarına ilişkin temel iş mantığı (business logic) kontrollerini barındırır.
-
 package models
 
-import "time"
-
-// ============================================================================
-// ADIM 3.2: DOMAIN ENTITIES - İLAN, FOTOĞRAF VE AÇIK ARTIRMA MODELLERİ
-// ============================================================================
-// ÇALIŞMA MANTIĞI & BİLMENİZ GEREKENLER:
-// 1. Hasar Durumu Kuralı: "Bilinmiyor" kaldırılmıştır; varsayılan "yok" (Hasar Yok)tur.
-// 2. Açık Artırma Çekirdeği:
-//    - StartingPrice: Açık artırma başlangıç taban fiyatı.
-//    - MinIncrement: Teklifler arasındaki minimum artış tutarı.
-//    - EndTime: Açık artırmanın sona ereceği kesin tarih/saat.
-//    - CurrentBid: Verilmiş en yüksek güncel teklif tutarı.
-// ============================================================================
-
-// DamageStatus, araç hasar durumunu temsil eden özel bir metin (string) türüdür.
-// Tip güvenliği (type safety) sağlamak ve geçersiz değerlerin girilmesini önlemek için kullanılır.
-type DamageStatus string
-
-// Sistemde tanımlı hasar durumu sabitleri (constants).
-const (
-	DamageUnknown   DamageStatus = "bilinmiyor" // Durum belirtilmemiş veya bilinmiyor
-	DamageNone      DamageStatus = "yok"        // Hasar kaydı yok, araç hatasız / orijinal
-	DamagePainted   DamageStatus = "boyali"     // Araçta boyalı parçalar mevcut
-	DamageReplaced  DamageStatus = "degisen"    // Araçta orijinaliyle değişmiş parça(lar) var
-	DamageFrameless DamageStatus = "tramersiz"  // Sigorta kayıtlarında tramer hasar kaydı bulunmuyor
-	DamageFrame     DamageStatus = "tramerli"   // Sigorta kayıtlarında tramer hasar kaydı mevcut
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
 )
 
-// DamageStatusLabel, hasar durumlarının kullanıcı arayüzünde gösterilecek anlaşılır Türkçe etiketlerini tutan haritadır (map).
+// DamageStatus, aracın hasar/ekspertiz durumunu temsil eder.
+// Kural: Hasar bilgisi verilmemişse (bilinmiyorsa) araç "Hasar Yok" kabul edilir.
+type DamageStatus string
+
+const (
+	DamageNone      DamageStatus = "yok"       // Hasar kaydı yok / bilinmiyor, araç hatasız kabul edilir
+	DamagePainted   DamageStatus = "boyali"    // Araçta boyalı parçalar mevcut
+	DamageReplaced  DamageStatus = "degisen"   // Araçta orijinaliyle değişmiş parça(lar) var
+	DamageFrameless DamageStatus = "tramersiz" // Sigorta kayıtlarında tramer hasar kaydı bulunmuyor
+	DamageFrame     DamageStatus = "tramerli"  // Sigorta kayıtlarında tramer hasar kaydı mevcut
+)
+
 var DamageStatusLabel = map[DamageStatus]string{
-	DamageUnknown:   "Bilinmiyor / Belirtilmemiş",
 	DamageNone:      "Hasar Yok / Hatasız",
 	DamagePainted:   "Boyalı",
 	DamageReplaced:  "Değişen Parça Var",
@@ -44,9 +27,7 @@ var DamageStatusLabel = map[DamageStatus]string{
 	DamageFrame:     "Tramer Kayıtlı",
 }
 
-// AllDamageStatuses, formlarda ve açılır listelerde (dropdown) sırayla göstermek için tanımlı tüm hasar durumlarını içeren dilimdir (slice).
 var AllDamageStatuses = []DamageStatus{
-	DamageUnknown,
 	DamageNone,
 	DamagePainted,
 	DamageReplaced,
@@ -54,21 +35,28 @@ var AllDamageStatuses = []DamageStatus{
 	DamageFrame,
 }
 
-// IsValid, verilen hasar durumunun tanımlı ve geçerli bir değer olup olmadığını denetler (doğrulama / validation).
 func (d DamageStatus) IsValid() bool {
-	_, ok := DamageStatusLabel[d] // Hasar durumu haritada (map) mevcut mu kontrol edilir
+	_, ok := DamageStatusLabel[d]
 	return ok
 }
 
-// Label, hasar durumunun ekranda gösterilecek kullanıcı dostu Türkçe etiket metnini döndürür.
 func (d DamageStatus) Label() string {
-	if l, ok := DamageStatusLabel[d]; ok { // Tanımlı bir etiket varsa onu alır
+	if l, ok := DamageStatusLabel[d]; ok {
 		return l
 	}
-	return string(d) // Tanımlı değilse ham metin değerini döndürür
+	return string(d)
 }
 
-// AllowedFuelTypes, sistemde ilan açılırken kabul edilen geçerli yakıt tiplerini tutan doğrulama haritasıdır.
+// NormalizeDamageStatus, dışarıdan gelen hasar değerini geçerli bir duruma çevirir.
+// Boş, bilinmeyen veya geçersiz değerler "yok" (Hasar Yok) kabul edilir.
+func NormalizeDamageStatus(s string) DamageStatus {
+	d := DamageStatus(strings.ToLower(strings.TrimSpace(s)))
+	if d.IsValid() {
+		return d
+	}
+	return DamageNone
+}
+
 var AllowedFuelTypes = map[string]bool{
 	"benzin":   true,
 	"dizel":    true,
@@ -78,45 +66,40 @@ var AllowedFuelTypes = map[string]bool{
 	"hidrojen": true,
 }
 
-// AllowedTransmissions, sistemde ilan açılırken kabul edilen geçerli vites tiplerini tutan doğrulama haritasıdır.
 var AllowedTransmissions = map[string]bool{
 	"manuel":        true,
 	"otomatik":      true,
 	"yari-otomatik": true,
 }
 
-// Listing, veritabanındaki 'listings' tablosunun Go dilindeki nesne (struct) karşılığıdır.
-// Bir aracın tüm ilan ve açık artırma bilgilerini üzerinde taşır.
 type Listing struct {
-	ID             int64        `json:"id"`                        // İlanın benzersiz kimlik numarası (birincil anahtar / primary key)
-	UserID         int64        `json:"user_id"`                   // İlanı oluşturan kullanıcının kimlik numarası (yabancı anahtar / foreign key)
-	Brand          string       `json:"brand"`                     // Aracın markası (örneğin: BMW, Renault)
-	Model          string       `json:"model"`                     // Aracın modeli (örneğin: Clio, 320i)
-	Year           int          `json:"year"`                      // Aracın üretim yılı
-	Mileage        int          `json:"mileage"`                   // Aracın katettiği toplam kilometre bilgisi
-	FuelType       string       `json:"fuel_type"`                 // Aracın yakıt türü (benzin, dizel vb.)
-	Transmission   string       `json:"transmission"`              // Aracın vites türü (manuel, otomatik vb.)
-	City           string       `json:"city"`                      // Aracın bulunduğu / satışa çıkarıldığı şehir
-	Description    string       `json:"description"`               // Satıcının girdiği detaylı ilan açıklaması
-	DamageStatus   DamageStatus `json:"damage_status"`             // Aracın hasar/tramer durumu
-	Status         string       `json:"status"`                    // İlanın durumu: 'active' (aktif), 'ended' (sona erdi), 'cancelled' (iptal)
-	EngineVolume   *int         `json:"engine_volume,omitempty"`   // Motor hacmi (cc cinsinden, isteğe bağlı/boş bırakılabilir göstergeci)
-	EstimatedPrice *float64     `json:"estimated_price,omitempty"` // Yapay zeka veya sistemce tahmin edilen piyasa değeri (isteğe bağlı)
-	CoverPhotoURL  string       `json:"cover_photo_url,omitempty"` // İlan listelemelerinde gösterilecek ana kapak fotoğrafının adresi
-	CreatedAt      time.Time    `json:"created_at"`                // İlanın veritabanına ilk kaydedilme zamanı
-	UpdatedAt      time.Time    `json:"updated_at"`                // İlan bilgilerinin son güncellenme zamanı
+	ID             int64        `json:"id"`
+	UserID         int64        `json:"user_id"`
+	Brand          string       `json:"brand"`
+	Model          string       `json:"model"`
+	Year           int          `json:"year"`
+	Mileage        int          `json:"mileage"`
+	FuelType       string       `json:"fuel_type"`
+	Transmission   string       `json:"transmission"`
+	City           string       `json:"city"`
+	Description    string       `json:"description"`
+	DamageStatus   DamageStatus `json:"damage_status"`
+	Status         string       `json:"status"`
+	EngineVolume   *int         `json:"engine_volume,omitempty"`
+	EstimatedPrice *float64     `json:"estimated_price,omitempty"`
+	CoverPhotoURL  string       `json:"cover_photo_url,omitempty"`
+	CreatedAt      time.Time    `json:"created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"`
 
 	// Hafta 4: Açık Artırma Alanları
-	StartingPrice float64   `json:"starting_price"`           // Açık artırmanın başlayacağı taban fiyat tutarı
-	MinIncrement  float64   `json:"min_increment"`            // Teklif verirken yapılması gereken en az artış tutarı
-	EndTime       time.Time `json:"end_time"`                 // Açık artırmanın biteceği kesin tarih ve saat
-	CurrentBid    float64   `json:"current_bid"`              // Şu ana kadar verilmiş olan en yüksek güncel teklif tutarı
-	WinnerUserID  *int64    `json:"winner_user_id,omitempty"` // Açık artırmayı kazanan kullanıcının kimlik numarası (kazanan yoksa nil)
-	WinningBid    *float64  `json:"winning_bid,omitempty"`    // Açık artırmayı kazandıran son teklif tutarı (kazanan yoksa nil)
-	WinnerEmail   string    `json:"winner_email,omitempty"`   // Kazanan kullanıcının e-posta adresi (iletişim ve bilgilendirme için)
-	WinnerName    string    `json:"winner_name,omitempty"`    // Kazanan kullanıcının adı/kullanıcı adı
-	OwnerName     string    `json:"owner_name,omitempty"`     // İlan sahibinin adı/kullanıcı adı
-	OwnerEmail    string    `json:"owner_email,omitempty"`    // İlan sahibinin e-posta adresi
+	StartingPrice float64   `json:"starting_price"`
+	MinIncrement  float64   `json:"min_increment"`
+	EndTime       time.Time `json:"end_time"`
+	CurrentBid    float64   `json:"current_bid"`
+	WinnerUserID  *int64    `json:"winner_user_id,omitempty"`
+	WinningBid    *float64  `json:"winning_bid,omitempty"`
+	WinnerName    string    `json:"winner_name,omitempty"` // Kazanan kullanıcının kullanıcı adı
+	OwnerName     string    `json:"owner_name,omitempty"`  // İlan sahibinin kullanıcı adı
 
 	// İlişkiler (Diğer tablolarla bağlantılı veriler)
 	Photos []ListingPhoto `json:"photos,omitempty"` // İlana ait yüklenmiş tüm fotoğrafların listesi
@@ -126,6 +109,11 @@ type Listing struct {
 // IsActive, açık artırmanın hem durumunun 'active' olduğunu hem de süresinin dolmadığını kontrol eder.
 func (l *Listing) IsActive() bool {
 	return l.Status == "active" && time.Now().Before(l.EndTime) // İlan durumu aktif mi ve bitiş zamanı henüz gelmedi mi kontrolü
+}
+
+// HasBids, ilana en az bir teklif verilip verilmediğini döner.
+func (l *Listing) HasBids() bool {
+	return l.CurrentBid > 0
 }
 
 // NextMinBid, bir sonraki geçerli teklifin en az ne kadar olması gerektiğini hesaplar.
@@ -149,13 +137,12 @@ type ListingPhoto struct {
 // Bid, veritabanındaki 'bids' tablosunun Go dilindeki karşılığıdır.
 // Açık artırmadaki bir ilana kullanıcılar tarafından verilen her bir teklifi temsil eder.
 type Bid struct {
-	ID        int64     `json:"id"`                   // Teklifin benzersiz kimlik numarası (birincil anahtar / primary key)
-	ListingID int64     `json:"listing_id"`           // Teklifin verildiği ilanın kimlik numarası (yabancı anahtar / foreign key)
-	UserID    int64     `json:"user_id"`              // Teklifi veren kullanıcının kimlik numarası (yabancı anahtar / foreign key)
-	UserEmail string    `json:"user_email,omitempty"` // Teklifi veren kullanıcının e-posta adresi (arayüzde göstermek için)
-	UserName  string    `json:"user_name,omitempty"`  // Teklifi veren kullanıcının adı (arayüzde göstermek için)
-	Amount    float64   `json:"amount"`               // Teklif edilen para tutarı (TL cinsinden)
-	CreatedAt time.Time `json:"created_at"`           // Teklifin sisteme kaydedildiği tarih ve saat
+	ID        int64     `json:"id"`                  // Teklifin benzersiz kimlik numarası (birincil anahtar / primary key)
+	ListingID int64     `json:"listing_id"`          // Teklifin verildiği ilanın kimlik numarası (yabancı anahtar / foreign key)
+	UserID    int64     `json:"user_id"`             // Teklifi veren kullanıcının kimlik numarası (yabancı anahtar / foreign key)
+	UserName  string    `json:"user_name,omitempty"` // Teklifi veren kullanıcının adı (arayüzde göstermek için)
+	Amount    float64   `json:"amount"`              // Teklif edilen para tutarı (TL cinsinden)
+	CreatedAt time.Time `json:"created_at"`          // Teklifin sisteme kaydedildiği tarih ve saat
 }
 
 // UserBidDTO, kullanıcının katıldığı açık artırmalardaki tekliflerinin özet görünümüdür (Veri Aktarım Nesnesi / DTO).
@@ -201,6 +188,45 @@ func (f *ListingFilter) HasAnyFilter() bool {
 		f.PriceMin > 0 || f.PriceMax > 0 || f.City != "" || f.FuelType != "" ||
 		f.Transmission != "" || f.DamageStatus != "" || f.MaxMileage > 0 ||
 		(f.Status != "" && f.Status != "active")
+}
+
+// QueryValues, filtreyi belirtilen sayfa numarasıyla birlikte URL sorgu parametrelerine dönüştürür.
+// Sayfalama bağlantılarında tüm filtrelerin korunması için kullanılır.
+func (f *ListingFilter) QueryValues(page int) url.Values {
+	v := url.Values{}
+	setStr := func(key, val string) {
+		if val != "" {
+			v.Set(key, val)
+		}
+	}
+	setInt := func(key string, val int) {
+		if val > 0 {
+			v.Set(key, fmt.Sprintf("%d", val))
+		}
+	}
+	setFloat := func(key string, val float64) {
+		if val > 0 {
+			v.Set(key, fmt.Sprintf("%.0f", val))
+		}
+	}
+
+	setStr("brand", f.Brand)
+	setStr("model", f.Model)
+	setStr("city", f.City)
+	setStr("fuel_type", f.FuelType)
+	setStr("transmission", f.Transmission)
+	setStr("damage_status", string(f.DamageStatus))
+	setStr("status", f.Status)
+	setInt("year_min", f.YearMin)
+	setInt("year_max", f.YearMax)
+	setInt("max_mileage", f.MaxMileage)
+	setFloat("price_min", f.PriceMin)
+	setFloat("price_max", f.PriceMax)
+	if f.PerPage > 0 && f.PerPage != 20 {
+		v.Set("per_page", fmt.Sprintf("%d", f.PerPage))
+	}
+	setInt("page", page)
+	return v
 }
 
 // Page, sayfalanmış (paginated) bir sonuç kümesini ve sayfalama üst verilerini temsil eden jenerik (generic) yapıdır.

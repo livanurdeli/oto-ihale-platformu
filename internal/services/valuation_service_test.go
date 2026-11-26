@@ -45,3 +45,28 @@ func TestEstimateMarketPrice(t *testing.T) {
 	}
 }
 
+func TestEstimateMarketPrice_BrandAliasAndDeterminism(t *testing.T) {
+	base := models.ListingCreateInput{
+		Model: "E 200", Year: 2020, Mileage: 60000,
+		FuelType: "benzin", Transmission: "otomatik", DamageStatus: models.DamageNone,
+	}
+
+	withAlias := base
+	withAlias.Brand = "Mercedes-Benz"
+	withKey := base
+	withKey.Brand = "Mercedes"
+	if a, b := services.EstimateMarketPrice(withAlias), services.EstimateMarketPrice(withKey); a != b {
+		t.Errorf("Mercedes-Benz ve Mercedes aynı taban fiyatı kullanmalı: %f != %f", a, b)
+	}
+
+	// Birden fazla model anahtarı içeren bir model her çağrıda aynı sonucu vermeli
+	multi := base
+	multi.Brand = "Toyota"
+	multi.Model = "Corolla Yaris"
+	first := services.EstimateMarketPrice(multi)
+	for i := 0; i < 50; i++ {
+		if got := services.EstimateMarketPrice(multi); got != first {
+			t.Fatalf("Tahmin deterministik olmalı: %f != %f", got, first)
+		}
+	}
+}

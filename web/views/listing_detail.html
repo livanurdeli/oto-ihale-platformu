@@ -7,8 +7,8 @@
   {{$canEdit := index . "CanEdit"}}
   {{$canBid := index . "CanBid"}}
   {{$nextMinBid := index . "NextMinBid"}}
-  {{$bidError := index . "BidError"}}
-  {{$bidSuccess := index . "BidSuccess"}}
+  {{$canDelete := index . "CanDelete"}}
+  {{$returnTo := index . "ReturnTo"}}
 
   <!-- HAFTA 5: SİTE İÇİ CANLI BİLDİRİM TOAST KONTEYNERİ -->
   <div id="live-toast-container"></div>
@@ -16,29 +16,27 @@
   <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
     <a href="/listings" class="btn btn-secondary btn-sm">‹ İlan Listesine Dön</a>
     
-    {{if $canEdit}}
-      <div style="display: flex; gap: 0.5rem; align-items: center;">
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
+      {{if $canEdit}}
         <a href="/listings/{{$listing.ID}}/edit" class="btn btn-secondary btn-sm">✏️ İlanı Düzenle</a>
+        {{if $canDelete}}
         <form method="POST" action="/listings/{{$listing.ID}}/delete" onsubmit="return confirm('Bu ilanı kalıcı olarak silmek istediğinizden emin misiniz?')" style="margin: 0;">
           <button type="submit" class="btn btn-danger btn-sm">🗑️ İlanı Sil</button>
         </form>
-      </div>
-    {{end}}
+        {{end}}
+      {{else}}
+        {{if $.User}}
+          <form method="POST" action="/users/{{$listing.UserID}}/report-fraud" onsubmit="return confirm('Bu kullanıcıyı dolandırıcılık veya spam ihlali gerekçesiyle bildirmek istiyor musunuz? (3 farklı bildirimde kullanıcının hesabı ve ilanları otomatik olarak kapatılır/silinir)');" style="margin: 0;">
+            <input type="hidden" name="reason" value="İlan üzerinden dolandırıcılık veya spam şüphesi">
+            <input type="hidden" name="return_to" value="{{$returnTo}}">
+            <button type="submit" class="btn btn-sm" style="background: #fff1f2; color: #e11d48; border: 1px solid #fecdd3; font-weight: 600;">
+              🚨 Dolandırıcılık / Spam Bildir
+            </button>
+          </form>
+        {{end}}
+      {{end}}
+    </div>
   </div>
-
-  {{if $bidError}}
-    <div id="server-bid-error" class="alert alert-error" style="margin-bottom: 1.5rem;">
-      <span>⚠️</span>
-      <div>{{$bidError}}</div>
-    </div>
-  {{end}}
-
-  {{if $bidSuccess}}
-    <div id="server-bid-success" class="alert alert-success" style="margin-bottom: 1.5rem;">
-      <span>🎉</span>
-      <div>{{$bidSuccess}}</div>
-    </div>
-  {{end}}
 
   <div class="detail-layout">
     <!-- SOL KOLON: FOTOĞRAFLAR, AÇIKLAMA VE TEKLİF GEÇMİŞİ -->
@@ -130,7 +128,7 @@
                       {{if eq $i 0}}🏆 En Yüksek{{else}}{{add $i 1}}{{end}}
                     </td>
                     <td style="padding: 10px 8px; color: #334151;">
-                      {{if $bid.UserName}}{{$bid.UserName}}{{else}}{{$bid.UserEmail}}{{end}}
+                      {{$bid.UserName}}
                     </td>
                     <td style="padding: 10px 8px; color: #059669; font-weight: 700;">
                       {{formatPrice $bid.Amount}} TL
@@ -199,10 +197,10 @@
         <!-- KAZANAN KUTUSU (Eğer Açık Artırma Bitmişse veya Canlı Sonlandığında) -->
         <div id="auction-winner-box" style="{{if $listing.IsActive}}display: none;{{end}} background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; text-align: center;">
           {{if not $listing.IsActive}}
-            {{if $listing.WinnerEmail}}
+            {{if $listing.WinnerUserID}}
               <div style="font-size: 1.5rem; margin-bottom: 4px;">🏆</div>
               <div style="font-weight: 800; color: #1e40af; font-size: 1.1rem;">Açık Artırma Kazananı</div>
-              <div id="winner-email-display" style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">{{if $listing.WinnerName}}{{$listing.WinnerName}}{{else}}{{$listing.WinnerEmail}}{{end}}</div>
+              <div id="winner-email-display" style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">{{if $listing.WinnerName}}{{$listing.WinnerName}}{{else}}Silinmiş kullanıcı{{end}}</div>
               <div id="winner-bid-display" style="color: #059669; font-weight: 800; font-size: 1.25rem;">{{formatPrice $listing.WinningBid}} TL</div>
             {{else}}
               <div style="color: #64748b; font-size: 0.9rem;">
@@ -271,7 +269,7 @@
         <div class="spec-grid" style="grid-template-columns: 1fr;">
           <div class="spec-item">
             <div class="spec-label">İlan Sahibi</div>
-            <div class="spec-value" style="font-weight: 700; color: #1e40af;">{{if $listing.OwnerName}}{{$listing.OwnerName}}{{else if $listing.OwnerEmail}}{{$listing.OwnerEmail}}{{else}}Satıcı{{end}}</div>
+            <div class="spec-value" style="font-weight: 700; color: #1e40af;">{{if $listing.OwnerName}}{{$listing.OwnerName}}{{else}}Satıcı{{end}}</div>
           </div>
           <div class="spec-item">
             <div class="spec-label">Marka</div>
@@ -340,7 +338,7 @@
     // 2. HAFTA 5: Canlı İhale & Bildirim Motoru
     (function initLiveAuctionEngine() {
       const listingId = {{$listing.ID}};
-      const currentUserId = {{if $.User}}{{$ .User.ID}}{{else}}0{{end}};
+      const currentUserId = {{if $.User}}{{$.User.ID}}{{else}}0{{end}};
       const endTimeStr = "{{$listing.EndTime.Format "2006-01-02T15:04:05Z07:00"}}";
       const endTime = new Date(endTimeStr);
 
@@ -356,6 +354,13 @@
       let isActive = {{if $listing.IsActive}}true{{else}}false{{end}};
       let pollTimer = null;
       let countdownTimer = null;
+
+      // Kullanıcı kaynaklı metinleri innerHTML'e yazmadan önce HTML kaçışı uygular (XSS önlemi)
+      function esc(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+      }
 
       // Toast Bildirimi Üretici Fonksiyon
       function showToast(title, message, type = 'info', actionBtn = null) {
@@ -442,7 +447,7 @@
       }
 
       // Açık Artırma Süresi Bittiğinde Arayüzü Güncelle
-      function triggerAuctionEnded(winnerEmail, winningBid) {
+      function triggerAuctionEnded(winnerName, winningBid) {
         isActive = false;
         const statusBadge = document.getElementById('auction-status-badge');
         if (statusBadge) {
@@ -461,12 +466,12 @@
         const winnerBox = document.getElementById('auction-winner-box');
         if (winnerBox) {
           winnerBox.style.display = 'block';
-          if (winnerEmail && winningBid) {
+          if (winnerName && winningBid) {
             winnerBox.innerHTML = `
               <div style="font-size: 1.5rem; margin-bottom: 4px;">🏆</div>
               <div style="font-weight: 800; color: #1e40af; font-size: 1.1rem;">Açık Artırma Kazananı</div>
-              <div style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">${winnerEmail}</div>
-              <div style="color: #059669; font-weight: 800; font-size: 1.25rem;">${winningBid} TL</div>
+              <div style="color: #1e3a8a; font-weight: 600; margin: 4px 0;">${esc(winnerName)}</div>
+              <div style="color: #059669; font-weight: 800; font-size: 1.25rem;">${esc(winningBid)} TL</div>
             `;
           }
         }
@@ -561,7 +566,7 @@
                 rowsHtml += `
                   <tr style="border-bottom: 1px solid #f1f5f9; ${bgStyle}">
                     <td style="padding: 10px 8px;">${topBadge}</td>
-                    <td style="padding: 10px 8px; color: #334151;">${bid.user_email} ${myTag}</td>
+                    <td style="padding: 10px 8px; color: #334151;">${esc(bid.user_name)} ${myTag}</td>
                     <td style="padding: 10px 8px; color: #059669; font-weight: 700;">${bid.amount_formatted} TL</td>
                     <td style="padding: 10px 8px; color: #64748b; font-size: 0.85rem;">${bid.created_at}</td>
                   </tr>
@@ -573,7 +578,7 @@
 
           // 3. İHALE BİTİŞ KONTROLÜ
           if (!data.is_active && isActive) {
-            triggerAuctionEnded(data.winner_email, data.winning_bid ? data.winning_bid.toLocaleString('tr-TR') : '');
+            triggerAuctionEnded(data.winner_name, data.winning_bid ? data.winning_bid.toLocaleString('tr-TR') : '');
             if (data.winner_user_id === currentUserId && currentUserId > 0) {
               showToast(
                 'TEBRİKLER! KAZANDINIZ!',
@@ -623,11 +628,10 @@
           submitBtn.innerHTML = '⏳ Teklif Gönderiliyor...';
 
           try {
-            const formData = new FormData(bidForm);
             const res = await fetch(bidForm.action, {
               method: 'POST',
               headers: { 'Accept': 'application/json' },
-              body: formData
+              body: new URLSearchParams({ amount: String(amountVal) })
             });
 
             const result = await res.json();
@@ -637,7 +641,7 @@
               // Anında canlı veriyi çek
               await pollLiveAuction();
             } else {
-              showToast('Teklif Verilemedi', result.error || 'Teklif işlenirken bir sorun oluştu.', 'error');
+              showToast('Teklif Verilemedi', esc(result.error || 'Teklif işlenirken bir sorun oluştu.'), 'error');
               await pollLiveAuction(); // Güncel durumu tazele
             }
           } catch (err) {
@@ -649,10 +653,60 @@
         });
       }
 
-      // Sayaç ve Polling Döngülerini Başlat
+      // Sayaç ve WebSocket / Polling Döngülerini Başlat
       updateCountdown();
       countdownTimer = setInterval(updateCountdown, 1000);
-      pollTimer = setInterval(pollLiveAuction, 2500); // 2.5 saniyede bir poll
+
+      // Canlı güncelleme stratejisi:
+      // WebSocket açıkken sunucu olayları (NEW_BID, AUCTION_ENDED) anında gelir ve polling durur.
+      // WebSocket bağlantısı yoksa yedek olarak 3 saniyede bir polling yapılır.
+      function startPolling() {
+        if (!pollTimer) pollTimer = setInterval(pollLiveAuction, 3000);
+      }
+      function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      }
+
+      let ws = null;
+      function connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/listings/${listingId}`;
+
+        try {
+          ws = new WebSocket(wsUrl);
+
+          ws.onopen = () => {
+            stopPolling();
+            pollLiveAuction(); // Bağlantı kopukken kaçırılan değişiklikleri senkronize et
+            const badge = document.getElementById('live-pulse-indicator');
+            if (badge) badge.title = 'WebSocket Canlı Yayında';
+          };
+
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (data.type === 'NEW_BID' || data.type === 'AUCTION_ENDED') {
+                pollLiveAuction(); // Güncel durumu (teklifler, kazanan) sunucudan çek
+              }
+            } catch (e) {
+              console.error('WS mesaj ayrıştırma hatası:', e);
+            }
+          };
+
+          ws.onclose = () => {
+            startPolling();
+            setTimeout(connectWebSocket, 3000);
+          };
+
+          ws.onerror = () => ws.close();
+        } catch (err) {
+          console.warn('WebSocket başlatılamadı, polling devrede.', err);
+          startPolling();
+        }
+      }
+
+      startPolling();
+      connectWebSocket();
     })();
   </script>
 
